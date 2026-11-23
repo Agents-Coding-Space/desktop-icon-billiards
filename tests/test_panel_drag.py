@@ -3,6 +3,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock
 
+from dib.config import fmt_pos
 from dib.panel import MainPanel
 
 
@@ -42,6 +43,20 @@ class PanelDragTests(unittest.TestCase):
         panel.root.geometry.reset_mock()
         panel._drag_move(SimpleNamespace(x_root=250, y_root=200))
         panel.root.geometry.assert_not_called()
+
+    def test_zero_and_negative_coordinates_keep_their_sign(self):
+        panel = self.make_panel()
+        panel.drag_offset = (150, 130)
+        panel._drag_move(SimpleNamespace(x_root=150, y_root=100))
+        panel.root.geometry.assert_called_once_with('+0+-30')
+        self.assertEqual(fmt_pos(0, 0), '+0+0')
+        self.assertEqual(fmt_pos(-40, 0), '+-40+0')
+
+    def test_minimize_keeps_a_negative_y_absolute(self):
+        panel = self.make_panel()
+        panel.root.winfo_height.return_value = 40
+        panel.minimize()
+        panel.root.geometry.assert_called_once_with('+100+-20')
 
     def test_press_while_minimized_restores_without_storing_offset(self):
         panel = self.make_panel()

@@ -112,6 +112,38 @@ class HelperTests(unittest.TestCase):
             self.assertEqual(machine_hash(settings), first)
 
 
+class RankSettingsPersistenceTests(unittest.TestCase):
+    def test_concurrent_updates_keep_file_and_memory_consistent(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'rank.json'
+            settings = RankSettings(path)
+            writers, per_writer = 8, 40
+            barrier = threading.Barrier(writers)
+            errors = []
+
+            def worker(index):
+                try:
+                    barrier.wait()
+                    for value in range(per_writer):
+                        settings.update(**{f'w{index}': value})
+                except Exception as exc:
+                    errors.append(exc)
+
+            threads = [threading.Thread(target=worker, args=(i,), daemon=True)
+                       for i in range(writers)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(5)
+            self.assertFalse(any(thread.is_alive() for thread in threads))
+            self.assertFalse(errors)
+            saved = json.loads(path.read_text(encoding='utf-8'))
+            for index in range(writers):
+                self.assertEqual(saved.get(f'w{index}'), per_writer - 1)
+                self.assertEqual(settings.get(f'w{index}'), per_writer - 1)
+            self.assertEqual(list(Path(folder).glob('*.tmp')), [])
+
+
 class ApiTests(unittest.TestCase):
     def setUp(self):
         self.server = FakeServer()

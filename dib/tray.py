@@ -21,13 +21,22 @@ NIM_ADD, NIM_MODIFY, NIM_DELETE = 0, 1, 2
 NIF_MESSAGE, NIF_ICON, NIF_TIP = 0x1, 0x2, 0x4
 TRAY_MESSAGE = win32con.WM_USER + 0x5A31
 CMD_SHOW, CMD_RESTART, CMD_QUIT, CMD_MINIMIZE, CMD_PIN = 1, 2, 3, 4, 5
+CMD_TOGGLE_WINDOW = 6
 MENU_ITEMS = ((CMD_SHOW, 'Show toolbar'),
-              (CMD_MINIMIZE, 'Hide game window'),
+              (CMD_TOGGLE_WINDOW, 'Show/Hide game window'),
               (CMD_RESTART, 'Restart round'),
               (CMD_PIN, 'Toggle pin'),
               (CMD_QUIT, 'Quit and restore desktop'))
 MENU_ACTIONS = {CMD_SHOW: 'show', CMD_RESTART: 'restart', CMD_QUIT: 'quit',
-                CMD_MINIMIZE: 'minimize', CMD_PIN: 'pin'}
+                CMD_MINIMIZE: 'minimize', CMD_PIN: 'pin',
+                CMD_TOGGLE_WINDOW: 'toggle_window'}
+
+
+def menu_label(command, visible=True):
+    """Current label of one menu entry (the window toggle reflects its state)."""
+    if command == CMD_TOGGLE_WINDOW:
+        return 'Hide game window' if visible else 'Show game window'
+    return next(label for cmd, label in MENU_ITEMS if cmd == command)
 # Shell sends NIN_SELECT on a left click, NIN_KEYSELECT on keyboard activation.
 NIN_SELECT, NIN_KEYSELECT = 0x400, 0x403
 _CLICK_EVENTS = (NIN_SELECT, NIN_KEYSELECT, win32con.WM_LBUTTONUP,
@@ -76,8 +85,10 @@ def build_icon_data(hwnd, hicon, tip):
 class SystemTrayIcon:
     """Own the hidden message window and the shell notification icon."""
 
-    def __init__(self, actions, *, tip=PRODUCT_NAME, icon_path=ICON_PATH, notify=_shell_notify):
+    def __init__(self, actions, *, tip=PRODUCT_NAME, icon_path=ICON_PATH, notify=_shell_notify,
+                 window_visible=None):
         self.actions = dict(actions)
+        self.window_visible = window_visible
         self.notify = notify
         self.class_name = f'DesktopIconBilliardsTray-{id(self)}'
         self.hwnd = None
@@ -122,8 +133,9 @@ class SystemTrayIcon:
     def _show_menu(self):
         menu = win32gui.CreatePopupMenu()
         try:
-            for command, label in MENU_ITEMS:
-                win32gui.AppendMenu(menu, win32con.MF_STRING, command, label)
+            visible = bool(self.window_visible()) if self.window_visible else True
+            for command, _label in MENU_ITEMS:
+                win32gui.AppendMenu(menu, win32con.MF_STRING, command, menu_label(command, visible))
             x, y = win32gui.GetCursorPos()
             try:
                 win32gui.SetForegroundWindow(self.hwnd)

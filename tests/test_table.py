@@ -1,8 +1,9 @@
 """Behaviour tests for the manual desktop billiards table."""
 import math
 import unittest
+from unittest.mock import patch
 
-from dib.table import BilliardsMotion
+from dib.table import BilliardsMotion, RAIL_REBOUND
 
 
 class BilliardsMotionTests(unittest.TestCase):
@@ -526,3 +527,89 @@ class WindowResizeTests(unittest.TestCase):
     def test_rescaled_same_area_returns_self(self):
         game = BilliardsMotion((0, 0, 800, 400), [(64, 64)] * 8)
         self.assertIs(game.rescaled((0, 0, 800, 400)), game)
+
+    def test_rescaled_copies_sunk_set_instead_of_aliasing_it(self):
+        game = BilliardsMotion((0, 0, 1000, 500), [(64, 64)] * 12)
+        game.sunk.add(3)
+        fresh = game.rescaled((0, 0, 1600, 800))
+        self.assertEqual(fresh.sunk, {3})
+        self.assertIsNot(fresh.sunk, game.sunk)
+        fresh.sunk.add(4)
+        fresh.exits[1] = (1., 2., 3., 4., 0.)
+        self.assertEqual(game.sunk, {3})
+        game.sunk.add(5)
+        self.assertEqual(fresh.sunk, {3, 4})
+
+
+class PocketMouthWallTests(unittest.TestCase):
+    """A pocket opens one rail (or a corner); the other rails still rebound."""
+
+    def _game(self):
+        return BilliardsMotion((0, 0, 1600, 1000), [(64, 64)] * 2)
+
+    def test_side_pocket_mouth_clamps_the_perpendicular_rail(self):
+        game = self._game()
+        ball = game.white
+        left, top, right, _ = game.bounds
+        mid = (left + right) / 2
+        ball.x, ball.y = left + ball.radius - 2, top + 120
+        ball.vx, ball.vy = -300., 0.
+        with patch.object(game, '_boundary_event', return_value=(4., 'pocket', (mid, top))):
+            game._walls(ball)
+        self.assertAlmostEqual(ball.x, left + ball.radius)
+        self.assertAlmostEqual(ball.vx, 300. * RAIL_REBOUND)
+        self.assertAlmostEqual(ball.y, top + 120)
+        self.assertEqual(ball.vy, 0.)
+
+    def test_side_pocket_mouth_leaves_the_open_axis_unclamped(self):
+        game = self._game()
+        ball = game.white
+        left, top, right, _ = game.bounds
+        mid = (left + right) / 2
+        ball.x, ball.y = mid, top + ball.radius - 2
+        ball.vx, ball.vy = 0., -300.
+        with patch.object(game, '_boundary_event', return_value=(4., 'pocket', (mid, top))):
+            game._walls(ball)
+        self.assertAlmostEqual(ball.y, top + ball.radius - 2)
+        self.assertEqual(ball.vy, -300.)
+
+    def test_corner_pocket_mouth_keeps_both_rails_open(self):
+        game = self._game()
+        ball = game.white
+        left, top, _, _ = game.bounds
+        ball.x, ball.y = left + ball.radius - 2, top + ball.radius - 2
+        ball.vx, ball.vy = -300., -300.
+        with patch.object(game, '_boundary_event', return_value=(4., 'pocket', (left, top))):
+            game._walls(ball)
+        self.assertLess(ball.x, left + ball.radius)
+        self.assertLess(ball.y, top + ball.radius)
+        self.assertEqual((ball.vx, ball.vy), (-300., -300.))
+
+    def test_rails_without_a_mouth_still_rebound_both_axes(self):
+        game = self._game()
+        ball = game.white
+        left, top, _, _ = game.bounds
+        ball.x, ball.y = left + ball.radius - 2, top + ball.radius - 2
+        ball.vx, ball.vy = -300., -300.
+        with patch.object(game, '_boundary_event', return_value=(4., 'rail', (True, True))):
+            game._walls(ball)
+        self.assertAlmostEqual(ball.x, left + ball.radius)
+        self.assertAlmostEqual(ball.y, top + ball.radius)
+        self.assertAlmostEqual(ball.vx, 300. * RAIL_REBOUND)
+        self.assertAlmostEqual(ball.vy, 300. * RAIL_REBOUND)
+
+    def test_real_side_and_corner_shots_still_sink(self):
+        for work, pocket_index in (((0, 0, 1600, 1000), 1), ((0, 0, 1600, 1000), 0)):
+            with self.subTest(pocket=pocket_index):
+                game = BilliardsMotion(work, [(64, 64)] * 15)
+                game.sunk = set(range(2, 16))
+                ball = game.icons[0]
+                px, py = game.pockets[pocket_index]
+                ball.x, ball.y = px, py + 150
+                ball.vx, ball.vy = 0., -900.
+                game.state = 'rolling'
+                for frame in range(120):
+                    game.step(1 / 60, frame / 60)
+                    if 1 in game.sunk:
+                        break
+                self.assertIn(1, game.sunk)

@@ -18,6 +18,7 @@ import win32gui
 from PIL import Image, ImageTk
 
 from . import card, diag
+from .config import fmt_pos
 from .release_notes import note_blocks
 
 BG = '#0e1a18'
@@ -193,7 +194,7 @@ class MainPanel:
         if self.minimized:
             return
         self.restore_y = self.root.winfo_y()
-        self.root.geometry(f'+{self.root.winfo_x()}+{-max(8, self.root.winfo_height() // 2)}')
+        self.root.geometry(fmt_pos(self.root.winfo_x(), -max(8, self.root.winfo_height() // 2)))
         self.minimized = True
 
     def restore(self):
@@ -203,7 +204,7 @@ class MainPanel:
         self.drag_offset = None
         y = self.restore_y if self.restore_y is not None else 0
         self.restore_y = None
-        self.root.geometry(f'+{self.root.winfo_x()}+{y}')
+        self.root.geometry(fmt_pos(self.root.winfo_x(), y))
 
     def _draggable(self, widget):
         widget.bind('<ButtonPress-1>', self._drag_start)
@@ -220,7 +221,7 @@ class MainPanel:
         if self.drag_offset is None:
             return
         x, y = self.drag_offset
-        self.root.geometry(f'+{event.x_root - x}+{event.y_root - y}')
+        self.root.geometry(fmt_pos(event.x_root - x, event.y_root - y))
 
     def set_look(self, key, text=None, kind=None, enabled=None):
         look = self.look.setdefault(key, {})
@@ -333,7 +334,7 @@ class ResultDialog:
         width, height = top.winfo_reqwidth() + border_w, top.winfo_reqheight() + border_h
         x = left + max(0, (right - left - width) // 2)
         y = upper + max(0, (bottom - upper - height) // 2)
-        top.geometry(f'+{x}+{y}')
+        top.geometry(fmt_pos(x, y))
 
     def alive(self):
         return self.top is not None and self.top.winfo_exists()
@@ -489,7 +490,7 @@ def show_update_dialog(root, current, info, entries, on_download):
     dialog.maxsize(width, height)
     x = left + (right - left - width) // 2
     y = top + (bottom - top - height) // 2
-    dialog.geometry(f'{width}x{height}+{x}+{y}')
+    dialog.geometry(f'{width}x{height}{fmt_pos(x, y)}')
     dialog.deiconify()
     dialog.lift()
     return dialog

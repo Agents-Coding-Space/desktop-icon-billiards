@@ -4,9 +4,9 @@ import unittest
 from unittest import mock
 
 from dib import tray
-from dib.tray import (CMD_MINIMIZE, CMD_PIN, CMD_QUIT, CMD_RESTART, CMD_SHOW,
-                      NIF_ICON, NIF_MESSAGE, NIF_TIP,
-                      NIM_ADD, NIM_DELETE, NIM_MODIFY, SystemTrayIcon, build_icon_data)
+from dib.tray import (CMD_MINIMIZE, CMD_PIN, CMD_QUIT, CMD_RESTART, CMD_SHOW, CMD_TOGGLE_WINDOW,
+                      MENU_ITEMS, NIF_ICON, NIF_MESSAGE, NIF_TIP,
+                      NIM_ADD, NIM_DELETE, NIM_MODIFY, SystemTrayIcon, build_icon_data, menu_label)
 
 
 class StructTests(unittest.TestCase):
@@ -33,6 +33,40 @@ class DispatchTests(unittest.TestCase):
         for command in (CMD_SHOW, CMD_RESTART, CMD_QUIT, CMD_MINIMIZE, CMD_PIN, 9999):
             icon.dispatch(command)
         self.assertEqual(calls, ['show', 'restart', 'quit', 'minimize', 'pin'])
+
+
+class WindowToggleTests(unittest.TestCase):
+    def test_single_toggle_entry_reflects_the_window_state(self):
+        commands = [command for command, _label in MENU_ITEMS]
+        self.assertEqual(commands.count(CMD_TOGGLE_WINDOW), 1)
+        self.assertNotIn(CMD_MINIMIZE, commands)
+        self.assertEqual(menu_label(CMD_TOGGLE_WINDOW, True), 'Hide game window')
+        self.assertEqual(menu_label(CMD_TOGGLE_WINDOW, False), 'Show game window')
+        self.assertEqual(menu_label(CMD_SHOW, False), 'Show toolbar')
+
+    def test_toggle_command_dispatches_the_toggle_action(self):
+        calls = []
+        icon = SystemTrayIcon.__new__(SystemTrayIcon)
+        icon.actions = {'toggle_window': lambda: calls.append('toggle')}
+        icon.dispatch(CMD_TOGGLE_WINDOW)
+        self.assertEqual(calls, ['toggle'])
+
+    def test_menu_rebuilds_its_label_when_the_window_is_hidden(self):
+        icon = SystemTrayIcon.__new__(SystemTrayIcon)
+        icon.hwnd = 42
+        icon.actions = {}
+        icon.window_visible = lambda: False
+        with mock.patch.object(tray.win32gui, 'CreatePopupMenu', return_value=3), \
+             mock.patch.object(tray.win32gui, 'AppendMenu') as append, \
+             mock.patch.object(tray.win32gui, 'GetCursorPos', return_value=(10, 10)), \
+             mock.patch.object(tray.win32gui, 'SetForegroundWindow'), \
+             mock.patch.object(tray.win32gui, 'TrackPopupMenu', return_value=0), \
+             mock.patch.object(tray.win32gui, 'DestroyMenu'), \
+             mock.patch.object(tray.win32gui, 'PostMessage'):
+            icon._show_menu()
+        labels = [call.args[3] for call in append.call_args_list]
+        self.assertIn('Show game window', labels)
+        self.assertNotIn('Hide game window', labels)
 
 
 class LifecycleTests(unittest.TestCase):

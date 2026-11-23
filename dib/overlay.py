@@ -329,6 +329,7 @@ class BilliardsOverlay:
     resize_request = None
     move_drag = None
     window_position = None
+    on_desktop = False
 
     def __init__(self, desktop, items, *, window_parent=None, titlebar_height=0):
         self.desktop = desktop
@@ -349,6 +350,12 @@ class BilliardsOverlay:
         self.credit_pressed = None
         self.credit_was_down = True
         self.link_requests = queue.SimpleQueue()
+        # Bot mode changes are queued on Tk and applied on the animation thread.
+        self.bot_commands = queue.SimpleQueue()
+        self.bot_command_serial = 0
+        self.bot_ack_serial = 0
+        self.bot_ack_mode = 'off'
+        self.on_desktop = False
         self.round_actions = queue.SimpleQueue()
         self.round_actions_key = None
         self.round_action_hover = None
@@ -498,6 +505,30 @@ class BilliardsOverlay:
             diag.log(f'environment logging failed: {exc!r}')
 
     # -- preparation -------------------------------------------------------
+    # Art rebuilt by ``prepare()``; the live table/window state is deliberately absent.
+    ART_FIELDS = ('items', 'rects', 'fonts', 'sources', 'templates', 'anchors', 'drawn',
+                  'poses', 'intro_sources', 'ring_frames', 'frame_cache', 'frame_cache_bytes',
+                  'rail_frame', 'pocket_frame', 'credit_links', 'luma_map', 'skipped',
+                  'real_count', 'padded', 'ball_info', 'original_items', 'original_rects',
+                  'original_fonts', 'original_sources')
+
+    def speculative_state(self):
+        """Clone art fields so a failed rebuild cannot touch live windows or art."""
+        state = object.__new__(BilliardsOverlay)
+        state.__dict__.update(self.__dict__)
+        for name in ('items', 'rects', 'fonts', 'sources', 'templates', 'anchors', 'drawn',
+                     'poses', 'original_items', 'original_rects', 'original_fonts',
+                     'original_sources'):
+            if name in self.__dict__:
+                state.__dict__[name] = list(self.__dict__[name])
+        return state
+
+    def commit_art_state(self, state):
+        """Publish a successfully built speculative state to the live overlay."""
+        for name in self.ART_FIELDS:
+            if name in state.__dict__:
+                setattr(self, name, state.__dict__[name])
+
     def prepare(self):
         # Run in a worker: thumbnail extraction can access disk / Shell extensions.
         comtypes.CoInitialize()
@@ -529,8 +560,28 @@ class BilliardsOverlay:
         finally:
             comtypes.CoUninitialize()
 
+    def _pad_icon_sources(self):
+        """Rebuild the working arrays from the filtered baselines, then pad once."""
+        self.items = list(self.original_items)
+        self.rects = list(self.original_rects)
+        self.fonts = list(self.original_fonts)
+        self.sources = list(self.original_sources)
+        self.real_count = len(self.sources)
+        extra = fill_sources(self.real_count)
+        for index in extra:
+            self.items.append(dict(self.items[index]))
+            self.rects.append(self.rects[index])
+            self.fonts.append(self.fonts[index])
+            self.sources.append(self.sources[index].copy())
+        self.padded = len(extra)
+        self.ball_info = ball_summary(self.desktop_total, self.real_count, self.padded)
+
     def load_icon_sources(self):
-        """Skip unreadable artwork, then clone only usable icons to the minimum count."""
+        """Filter artwork once, then rebuild padded arrays from that original set."""
+        if hasattr(self, 'original_sources'):
+            self._pad_icon_sources()
+            return
+
         import pywintypes
 
         loaded = []
@@ -560,29 +611,25 @@ class BilliardsOverlay:
         if not loaded:
             raise RuntimeError('No icons were retrieved. Make sure the desktop has usable icons and they are shown.')
         loaded.sort(key=lambda row: row[0])
-        self.items = [self.items[index] for index, _ in loaded]
-        self.rects = [self.rects[index] for index, _ in loaded]
-        self.fonts = [self.fonts[index] for index, _ in loaded]
-        self.sources = [source for _, source in loaded]
-        self.real_count = len(loaded)
-        extra = fill_sources(self.real_count)
-        for index in extra:
-            self.items.append(dict(self.items[index]))
-            self.rects.append(self.rects[index])
-            self.fonts.append(self.fonts[index])
-            self.sources.append(self.sources[index].copy())
-        self.padded = len(extra)
-        self.ball_info = ball_summary(self.desktop_total, self.real_count, self.padded)
+        # Baselines are filtered, never cloned: cropping replaces list entries.
+        self.original_items = [self.items[index] for index, _ in loaded]
+        self.original_rects = [self.rects[index] for index, _ in loaded]
+        self.original_fonts = [self.fonts[index] for index, _ in loaded]
+        self.original_sources = [source for _, source in loaded]
+        # Rebuild working arrays from the baselines on every load, including the
+        # first one. A resize therefore never pads an already padded list.
+        self._pad_icon_sources()
         diag.log(f'balls: {self.ball_info}; unreadable={self.skipped}')
 
     def build_templates(self):
         """Build label canvases and the resting pose each icon starts from."""
         self.frame_cache = OrderedDict()
         self.frame_cache_bytes = 0
-        if not hasattr(self, 'original_sources'):
-            self.original_sources = [source.copy() for source in self.sources]
-        else:
-            self.sources = [source.copy() for source in self.original_sources]
+        # Reset every array before a rebuild; never append onto art from a
+        # previous size (that grew the arrays and desynchronised the poses).
+        self.templates = []
+        self.anchors = []
+        self.drawn = []
         desktop_sizes = []
         for index, (source, (icon, label)) in enumerate(zip(self.sources, self.rects)):
             desktop_source = source.copy()
@@ -657,21 +704,27 @@ class BilliardsOverlay:
         if win32gui.GetClientRect(self.parent)[2:] == (width, height) and self.table.work_area == (0, 0, width, height):
             return
         old = self.table
+        previous_bounds, previous_geometry = self.primary_bounds, self.geometry
         self.primary_bounds = (0, 0, width, height)
         self.geometry = (0, 0, width, height)
+        candidate = self.speculative_state()
         try:
-            self.prepare()  # rebuilds table art and rail frames for the new size
+            candidate.prepare()  # rebuilds table art and rail frames for the new size
         except Exception:
-            # Keep the old table art if a resize races with COM/Shell teardown.
-            self.primary_bounds, self.geometry = old.work_area, old.work_area
+            # Nothing has been published or destroyed yet: old art stays live.
+            self.primary_bounds, self.geometry = previous_bounds, previous_geometry
             diag.log('window resize art refresh failed; kept previous table')
             return
+        self.commit_art_state(candidate)
+        # Only after a successful build may the old table windows go away.
+        self.clear_table()
         self.table = old.rescaled(self.primary_bounds)
         self.drawn = [None] * len(self.items)
-        self.cue_key = self.guide_key = self.charge_key = None
-        for surface in self.surfaces.values():
-            surface.close()
-        self.surfaces = {}
+        self.cue_key = self.guide_key = self.charge_key = self.white_position = None
+        self.white_frame = None
+        self.draw_table()  # present the new rail and pockets on fresh windows
+        if not self.felt_visible:
+            self.set_felt(False)  # fresh rail windows must honour hidden-felt mode
         diag.log(f'window resized to {width}x{height}; round state preserved')
 
     # -- lifecycle ---------------------------------------------------------
@@ -706,6 +759,29 @@ class BilliardsOverlay:
 
     def request_restart(self):
         self.restart_requested.set()
+
+    def request_bot_cycle(self):
+        """Queue a mode change from Tk; the animation thread applies it."""
+        self.bot_command_serial += 1
+        self.bot_commands.put(self.bot_command_serial)
+        return self.bot_command_serial
+
+    def consume_bot_commands(self):
+        """Apply queued bot commands on the animation thread, in arrival order."""
+        changed = False
+        while True:
+            try:
+                serial = self.bot_commands.get_nowait()
+            except queue.Empty:
+                break
+            mode = self.bot.cycle()
+            if mode != 'off':
+                # Fresh slate so scores never leak across difficulty switches.
+                self.bot.scores = {'human': 0, 'bot': 0}
+            self.bot_ack_serial = serial
+            self.bot_ack_mode = mode
+            changed = True
+        return changed
 
     def request_white_texture(self, texture):
         self.white_requests.put(texture.copy() if texture is not None else None)
@@ -794,11 +870,27 @@ class BilliardsOverlay:
             self.update_pointer(now, screen)
             self.table.step(dt, now)
             self.draw_balls()
-        self.aim_visible = self.felt_visible or bool(win32api.GetAsyncKeyState(win32con.VK_SHIFT) & 0x8000)
+        shift = bool(win32api.GetAsyncKeyState(win32con.VK_SHIFT) & 0x8000)
+        self.aim_visible = self.felt_visible or (self.on_desktop and self.keyboard_focus_valid() and shift)
         self.draw_table()
         self.draw_guide()
         self.draw_charge()
         self.draw_round_actions()
+
+    def keyboard_focus_valid(self):
+        """True only when the game (or the desktop in desktop mode) owns focus."""
+        try:
+            foreground = win32gui.GetForegroundWindow()
+            if not foreground:
+                return False
+            focus_pid = win32process.GetWindowThreadProcessId(foreground)[1]
+            if self.window_mode:
+                root = win32gui.GetAncestor(self.parent, win32con.GA_ROOT) or self.parent
+                return foreground in (root, self.parent) or focus_pid == os.getpid()
+            return (win32gui.GetClassName(foreground) in ('Progman', 'WorkerW')
+                    and focus_pid == win32process.GetWindowThreadProcessId(self.parent)[1])
+        except win32gui.error:
+            return False
 
     def read_pointer(self, now):
         """Suspend only an access-denied cursor read; unrelated failures stay visible."""
@@ -862,6 +954,8 @@ class BilliardsOverlay:
         left, top, right, bottom = self.table.bounds
         on_desktop = False
         blocked = None
+        # Persist for the aim gate: a stale SHIFT from another app must not draw the cue.
+        self.on_desktop = False
         if self.window_mode:
             grip = getattr(self, 'grip_size', 0)
             outside_grip = not (x > right - grip and y > bottom - grip)
@@ -877,6 +971,7 @@ class BilliardsOverlay:
                 if not on_desktop and win32process.GetWindowThreadProcessId(top_window)[1] != os.getpid():
                     title = win32gui.GetWindowText(top_window)[:30]
                     blocked = (title or name, name)  # the player sees the title, the log keeps the class
+        self.on_desktop = on_desktop
         self.blocked_by = blocked[0] if blocked else None
         if blocked != self.last_blocked:
             self.last_blocked = blocked
@@ -894,6 +989,7 @@ class BilliardsOverlay:
             over_credit = False
         self.update_credit_pointer(x, y, down, over_credit)
         self.update_round_action_pointer(x, y, down, on_desktop)
+        self.consume_bot_commands()
         if self.bot.enabled:
             self.bot.update(self.table, now)
         human_down = down and not self.bot.bot_turn

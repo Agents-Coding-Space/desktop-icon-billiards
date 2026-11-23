@@ -67,6 +67,45 @@ class IconLoadingTests(unittest.TestCase):
         self.assertLessEqual(max(overlay.sources[0].size), 64)
 
     @patch('dib.overlay.diag.log')
+    def test_repeated_loads_never_grow_the_ball_arrays(self, log):
+        overlay = self.overlay(3)
+        with patch('dib.overlay.artwork',
+                   side_effect=lambda identity, size: Image.new('RGBA', (size, size), 'red')):
+            overlay.load_icon_sources()
+        baseline = (len(overlay.items), len(overlay.rects), len(overlay.fonts), len(overlay.sources),
+                    len(overlay.original_sources), overlay.real_count, overlay.padded, overlay.skipped)
+        # A resize rebuilds from the filtered baselines; it must not re-read Shell art.
+        with patch('dib.overlay.artwork', side_effect=AssertionError('artwork re-read on resize')):
+            overlay.load_icon_sources()
+            overlay.load_icon_sources()
+        self.assertEqual(baseline,
+                         (len(overlay.items), len(overlay.rects), len(overlay.fonts), len(overlay.sources),
+                          len(overlay.original_sources), overlay.real_count, overlay.padded, overlay.skipped))
+        originals = [source.tobytes() for source in overlay.original_sources]
+        with patch('dib.overlay.artwork', side_effect=AssertionError('artwork re-read on resize')):
+            overlay.load_icon_sources()
+        self.assertEqual(originals, [source.tobytes() for source in overlay.original_sources])
+
+    @patch('dib.overlay.diag.log')
+    def test_repeated_template_builds_reset_arrays_and_keep_originals(self, log):
+        overlay = self.overlay(1)
+        with patch('dib.overlay.artwork', return_value=Image.new('RGBA', (128, 128), 'red')):
+            overlay.load_icon_sources()
+        overlay.fonts = [ImageFont.load_default()] * len(overlay.items)
+        overlay.original_fonts = [ImageFont.load_default()] * len(overlay.original_fonts)
+        overlay.primary_bounds = (0, 0, 1920, 1080)
+        counts = []
+        originals = [source.tobytes() for source in overlay.original_sources]
+        for _ in range(3):
+            overlay.load_icon_sources()
+            overlay.build_templates()
+            counts.append((len(overlay.templates), len(overlay.anchors), len(overlay.drawn),
+                           len(overlay.sources), len(overlay.poses)))
+        self.assertEqual(counts, [counts[0]] * 3)
+        self.assertEqual(counts[0][0], len(overlay.items))
+        self.assertEqual(originals, [source.tobytes() for source in overlay.original_sources])
+
+    @patch('dib.overlay.diag.log')
     def test_high_resolution_failure_falls_back_to_desktop_size(self, log):
         for failure in (OSError('large image unavailable'), Image.new('RGBA', (128, 128))):
             with self.subTest(failure=type(failure).__name__):

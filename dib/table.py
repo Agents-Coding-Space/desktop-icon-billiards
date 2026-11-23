@@ -107,10 +107,12 @@ class BilliardsMotion:
             target.y = new_t + (source.y - old_t) * sy
             target.vx, target.vy = source.vx * speed_scale, source.vy * speed_scale
             target.impact, target.angle = source.impact, source.angle
-        for name in ('sunk', 'white_sunk', 'round_serial', 'first_shot_at', 'finished_at',
+        for name in ('white_sunk', 'round_serial', 'first_shot_at', 'finished_at',
                      'paused_at', 'shots', 'clock', 'stroke', 'power', 'charge',
                      'break_shot', 'ready_for'):
             setattr(fresh, name, getattr(self, name))
+        # The new table owns its own set; sharing it would let a resize mutate live round state.
+        fresh.sunk = set(self.sunk)
         fresh.aim = tuple(self.aim)
         fresh.exits = {index: (new_l + (x - old_l) * sx, new_t + (y - old_t) * sy,
                                new_l + (tx - old_l) * sx, new_t + (ty - old_t) * sy, age)
@@ -537,19 +539,30 @@ class BilliardsMotion:
 
     def _walls(self, body):
         speed = math.hypot(body.vx, body.vy)
+        mouth = None
         if speed:
-            _, kind, _ = self._boundary_event(
+            _, kind, contact = self._boundary_event(
                 (body.x, body.y), (body.vx / speed, body.vy / speed), body.radius)
             if kind == 'pocket':
-                return
+                mouth = contact
         left, top, right, bottom = self.bounds
-        for axis, velocity, low, high in (('x', 'vx', left + body.radius, right - body.radius),
-                                          ('y', 'vy', top + body.radius, bottom - body.radius)):
+        # A pocket mouth is a gap in one rail (side pocket) or in a corner (two rails).
+        # Leave only the axis actually crossing that gap open; the perpendicular
+        # axis must still be clamped and reflected or the ball leaves the table.
+        for axis, velocity, low, high, mouth_edges in (
+                ('x', 'vx', left + body.radius, right - body.radius, (left, right)),
+                ('y', 'vy', top + body.radius, bottom - body.radius, (top, bottom))):
             position = getattr(body, axis)
             speed = getattr(body, velocity)
             if position < low or position > high:
+                crossing_low = position < low
+                edge = mouth_edges[0] if crossing_low else mouth_edges[1]
+                if mouth is not None:
+                    mouth_at = mouth[0] if axis == 'x' else mouth[1]
+                    if abs(mouth_at - edge) <= 1e-6:
+                        continue
                 setattr(body, axis, max(low, min(high, position)))
-                if (position < low and speed < 0) or (position > high and speed > 0):
+                if (crossing_low and speed < 0) or (not crossing_low and speed > 0):
                     setattr(body, velocity, -speed * RAIL_REBOUND)
                     body.impact = max(body.impact, min(.23, abs(speed) / self.height * .25))
 

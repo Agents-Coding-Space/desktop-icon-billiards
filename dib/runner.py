@@ -23,6 +23,7 @@ class BilliardsRunner:
         self.stopping = threading.Event()
         self.error = None
         self.show_request = None
+        self.show_lock = threading.Lock()
         self.snapshot_lock = threading.Lock()
         self.latest_snapshot = None
         self.round_events = deque()
@@ -32,7 +33,16 @@ class BilliardsRunner:
         self.thread.start()
 
     def request_show(self, snapshot, journal):
-        self.show_request = (snapshot, journal)
+        """Hand one coherent (snapshot, journal) pair to the animation thread."""
+        with self.show_lock:
+            self.show_request = (snapshot, journal)
+
+    def consume_show_request(self):
+        """Take the pending pair once; never hold the lock while calling overlay.show()."""
+        with self.show_lock:
+            request = self.show_request
+            self.show_request = None
+            return request
 
     def publish_snapshot(self, snapshot):
         """Coalesce ordinary frames but retain round/first-shot/finish transitions."""
@@ -75,10 +85,13 @@ class BilliardsRunner:
             last = time.perf_counter()
             while not self.stopping.is_set():
                 now = time.perf_counter()
-                if self.show_request and not self.shown.is_set():
-                    if self.overlay.show(*self.show_request) is not False:
-                        self.shown.set()
-                        last = now
+                if not self.shown.is_set():
+                    request = self.consume_show_request()
+                    if request is not None:
+                        snapshot, journal = request
+                        if self.overlay.show(snapshot, journal) is not False:
+                            self.shown.set()
+                            last = now
                 if self.shown.is_set():
                     self.overlay.draw(now, min(0.05, now - last))
                     self.publish_snapshot(self.overlay.table.snapshot())

@@ -9,6 +9,7 @@ import win32api
 import win32con
 
 from .art import white_art
+from .config import fmt_pos
 from .panel import ACCENT, BG, CARD, FONT, MUTED, TEXT, Pill
 
 
@@ -108,7 +109,7 @@ class CropDialog:
         dialog.update_idletasks()
         x = left + max(0, (right - left - dialog.winfo_reqwidth()) // 2)
         y = top + max(0, (bottom - top - dialog.winfo_reqheight()) // 2)
-        dialog.geometry(f'+{x}+{y}')
+        dialog.geometry(fmt_pos(x, y))
         dialog.deiconify()
         dialog.grab_set()
 
@@ -199,7 +200,7 @@ class WhiteBallDialog:
         dialog.update_idletasks()
         x = max(0, (dialog.winfo_screenwidth() - dialog.winfo_reqwidth()) // 2)
         y = max(0, (dialog.winfo_screenheight() - dialog.winfo_reqheight()) // 2)
-        dialog.geometry(f'+{x}+{y}')
+        dialog.geometry(fmt_pos(x, y))
 
     def refresh(self):
         self.photo = ImageTk.PhotoImage(white_art(46, shaded=True, texture=self.texture), master=self.window)

@@ -10,6 +10,7 @@ import win32con
 import win32gui
 
 from . import card
+from .config import fmt_pos
 from .panel import ACCENT, BG, CARD, FONT, GOLD, MUTED, TEXT, configure_styles
 from .rank import RankError
 
@@ -93,7 +94,7 @@ class LeaderboardDialog:
         width = min(max(700, top.winfo_reqwidth()), right - left - bw - 32)
         height = min(max(720, top.winfo_reqheight()), bottom - upper - bh - 32)
         x, y = left + (right - left - width - bw) // 2, upper + (bottom - upper - height - bh) // 2
-        top.geometry(f'{width}x{height}+{x}+{y}')
+        top.geometry(f'{width}x{height}{fmt_pos(x, y)}')
         top.minsize(min(width, 540), min(height, 350))
         top.maxsize(right - left - bw - 32, bottom - upper - bh - 32)
         self.poll_id = top.after(100, self._poll)

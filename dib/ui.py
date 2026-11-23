@@ -20,6 +20,7 @@ from PIL import Image, ImageTk
 from tkinter import messagebox, ttk
 
 from . import config, diag
+from .config import fmt_pos
 from .display import dpi_context
 from .history import MatchHistory
 from .hotkeys import Hotkeys
@@ -46,6 +47,8 @@ RANK_CONSENT = (
 )
 RANK_INTRO = 'Now you can race against global players to clear the table fastest.\n\n' + RANK_CONSENT
 
+
+WINDOW_RESIZE_DEBOUNCE_MS = 150
 
 _last_log = {}
 
@@ -221,7 +224,9 @@ class DesktopBilliardsApp:
                                         'restart': self.restart,
                                         'quit': self.close,
                                         'minimize': self.hide_game_window,
-                                        'pin': self.toggle_pin})
+                                        'toggle_window': self.toggle_game_window,
+                                        'pin': self.toggle_pin},
+                                       window_visible=self.game_window_visible)
         except Exception:
             _write_log('tray.log', traceback.format_exc())
         root.after(20, self.start)
@@ -266,14 +271,11 @@ class DesktopBilliardsApp:
         self.refresh_window_score()
 
     def toggle_bot(self):
+        """Queue the mode change; the animation thread applies it and acks the serial."""
         overlay = self.runner.overlay if getattr(self, 'runner', None) is not None else None
         if overlay is None:
             return
-        mode = overlay.bot.cycle()
-        # Fresh slate so scores never leak across difficulty switches mid-round.
-        if mode != 'off':
-            overlay.bot.scores = {'human': 0, 'bot': 0}
-        self.refresh_bot_button()
+        overlay.request_bot_cycle()
 
     def refresh_bot_button(self):
         panel = getattr(self, 'panel', None)
@@ -314,7 +316,7 @@ class DesktopBilliardsApp:
             left, top, right, bottom = win32api.GetMonitorInfo(monitor)['Work']
         x = max(left, min(x, right - width))
         y = max(top, min(y, bottom - height))
-        root.geometry(f'+{x}+{y}')
+        root.geometry(fmt_pos(x, y))
 
     def remember_position(self):
         if self.root.state() == 'normal':
@@ -447,9 +449,13 @@ class DesktopBilliardsApp:
         self.window_pinned = bool(self.settings.get('window_pinned', False))
         top.attributes('-topmost', self.window_pinned)
         x, y = self.settings.get('win_x'), self.settings.get('win_y')
-        width = self.settings.get('win_w') or 1000
-        height = self.settings.get('win_h') or 560
-        top.geometry(f'{max(320, width)}x{max(160, height)}+{x or 120}+{y or 100}')
+        width = self.settings.get('win_w') if self.settings.get('win_w') is not None else 1000
+        height = self.settings.get('win_h') if self.settings.get('win_h') is not None else 560
+        if x is None:
+            x = 120
+        if y is None:
+            y = 100
+        top.geometry(f'{max(320, width)}x{max(160, height)}{fmt_pos(x, y)}')
         handle = tk.Label(top, text='⋮⋮', font=('Segoe UI', 11, 'bold'),
                           fg='#e1e9eb', bg='#1b2f2a', cursor='fleur')
         handle.place(relx=0, rely=0, anchor='nw')
@@ -467,7 +473,7 @@ class DesktopBilliardsApp:
         self._window_score_parts = None
         controls = tk.Frame(top, bg='#010203')
         controls.place(relx=1, rely=0, anchor='ne')
-        for text, command in (('–', top.withdraw), ('P', self.toggle_pin), ('×', self.close)):
+        for text, command in (('–', self.hide_game_window), ('P', self.toggle_pin), ('×', self.close)):
             button = tk.Label(controls, text=text, font=('Segoe UI', 10, 'bold'),
                               fg='#e1e9eb', bg='#1b2f2a', width=2, cursor='hand2')
             button.pack(side='left', padx=(0, 2))
@@ -495,9 +501,31 @@ class DesktopBilliardsApp:
                 except win32gui.error:
                     pass
 
+    def game_window_visible(self):
+        """Current visibility of the optional game window (used by the tray label)."""
+        window = getattr(self, 'game_window', None)
+        if window is None:
+            return False
+        try:
+            return bool(window.winfo_ismapped())
+        except (tk.TclError, AttributeError):
+            return False
+
     def hide_game_window(self):
-        if self.game_window is not None:
-            self.game_window.withdraw()
+        """Hide only the game window; the round and the toolbar are untouched."""
+        window = getattr(self, 'game_window', None)
+        if window is not None:
+            window.withdraw()
+
+    def toggle_game_window(self):
+        """Tray toggle: show or hide the game window without restarting a round."""
+        if not getattr(self, 'window_mode', False):
+            return
+        if self.game_window_visible():
+            self.hide_game_window()
+        elif self.game_window is not None:
+            self.game_window.deiconify()
+            self.game_window.lift()
 
     def toggle_pin(self):
         if self.game_window is None:
@@ -508,6 +536,7 @@ class DesktopBilliardsApp:
         self.refresh_buttons()
 
     def destroy_game_window(self):
+        self.cancel_window_configure()
         self.window_score_labels = ()
         self._window_score_parts = None
         if self.game_window is not None:
@@ -529,7 +558,7 @@ class DesktopBilliardsApp:
         offset = getattr(self, '_window_drag_offset', None)
         if offset is None:
             return
-        self.game_window.geometry(f'+{event.x_root - offset[0]}+{event.y_root - offset[1]}')
+        self.game_window.geometry(fmt_pos(event.x_root - offset[0], event.y_root - offset[1]))
 
     @staticmethod
     def locked_window_size(width, height, dx=0, dy=0):
@@ -557,14 +586,39 @@ class DesktopBilliardsApp:
         self.game_window.geometry(f'{width}x{height}')
 
     def _window_configured(self, event):
+        """Coalesce a drag's Configure events into one final geometry update."""
         if event.widget is not self.game_window:
             return
-        size = (event.width, event.height)
+        self.cancel_window_configure()
+        self._window_configure_after = self.root.after(WINDOW_RESIZE_DEBOUNCE_MS,
+                                                       self._apply_window_geometry)
+
+    def cancel_window_configure(self):
+        """Drop a pending geometry callback when the window or app goes away."""
+        pending = getattr(self, '_window_configure_after', None)
+        if pending is None:
+            return
+        self._window_configure_after = None
+        try:
+            self.root.after_cancel(pending)
+        except (tk.TclError, ValueError):
+            pass
+
+    def _apply_window_geometry(self):
+        """Persist and publish the geometry that remained after the debounce."""
+        self._window_configure_after = None
+        window = getattr(self, 'game_window', None)
+        if window is None or getattr(self, 'closing', False):
+            return
+        try:
+            size = (window.winfo_width(), window.winfo_height())
+            x, y = window.winfo_x(), window.winfo_y()
+        except tk.TclError:
+            return
         if size == self.window_size:
             return
         self.window_size = size
-        self.settings.update(win_x=self.game_window.winfo_x(), win_y=self.game_window.winfo_y(),
-                             win_w=size[0], win_h=size[1])
+        self.settings.update(win_x=x, win_y=y, win_w=size[0], win_h=size[1])
         overlay = getattr(getattr(self, 'runner', None), 'overlay', None)
         if overlay is not None:
             overlay.request_resize(*size)
@@ -688,6 +742,10 @@ class DesktopBilliardsApp:
                 if not self.runner.overlay.input_suspended:
                     self.update_toolbar()
                 overlay = self.runner.overlay
+                ack = getattr(overlay, 'bot_ack_serial', None)
+                if ack != getattr(self, '_bot_ack_serial', None):
+                    self._bot_ack_serial = ack
+                    self.refresh_bot_button()
                 try:
                     while True:
                         url = overlay.link_requests.get_nowait()
@@ -791,7 +849,7 @@ class DesktopBilliardsApp:
         """Pin the hidden-mode badge to the top-right of the primary work area."""
         monitor = win32api.MonitorFromPoint((0, 0), win32con.MONITOR_DEFAULTTOPRIMARY)
         left, top, right, bottom = win32api.GetMonitorInfo(monitor)['Work']
-        return f'{width}x{height}+{max(left, right - width - 8)}+{top + 8}'
+        return f'{width}x{height}{fmt_pos(max(left, right - width - 8), top + 8)}'
 
     def show_toolbar_eye(self):
         if self.toolbar_eye is None:
@@ -1034,6 +1092,7 @@ class DesktopBilliardsApp:
     def close(self):
         if self.closing:
             return
+        self.cancel_window_configure()
         try:
             self.restore()
         except Exception as exc:

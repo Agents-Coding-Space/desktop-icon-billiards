@@ -1,10 +1,14 @@
 """Behaviour tests for the hot-seat solo bot."""
+import math
+import queue
 import random
+import threading
 import unittest
 from types import SimpleNamespace
 
 from dib.bot import MODES, SETTINGS, BotController
-from dib.table import BilliardsMotion
+from dib.overlay import BilliardsOverlay
+from dib.table import BALL_IMPULSE, ROLLING_DRAG, BilliardsMotion
 
 WORK_AREA = (0, 0, 1600, 1000)
 ICONS = [(64, 64)] * 15
@@ -37,6 +41,25 @@ class CycleTests(unittest.TestCase):
         self.assertIn('Bot Hard', bot.status_text())
         self.assertIn('3', bot.status_text())
         self.assertEqual(bot.result_text(), 'Bot wins 3-7')
+
+
+class QueuedCommandTests(unittest.TestCase):
+    def test_queued_cycles_apply_in_order_on_the_consumer(self):
+        overlay = object.__new__(BilliardsOverlay)
+        overlay.bot = BotController()
+        overlay.bot.scores = {'human': 3, 'bot': 7}
+        overlay.bot_commands = queue.SimpleQueue()
+        overlay.bot_command_serial = overlay.bot_ack_serial = 0
+        overlay.bot_ack_mode = 'off'
+        overlay.request_bot_cycle()
+        overlay.request_bot_cycle()
+        self.assertEqual(overlay.bot.mode, 'off')
+        overlay.consume_bot_commands()
+        self.assertEqual(overlay.bot.mode, 'medium')
+        self.assertEqual(overlay.bot.scores, {'human': 0, 'bot': 0})
+        self.assertEqual(overlay.bot_ack_serial, 2)
+        self.assertEqual(overlay.bot_ack_mode, 'medium')
+        self.assertFalse(overlay.consume_bot_commands())
 
 
 class SyncTests(unittest.TestCase):
@@ -145,6 +168,24 @@ class ShotPlanningTests(unittest.TestCase):
         self.assertEqual(BotController.shot_power(game, 10000, 10000, 1.0), 1.0)
         self.assertGreaterEqual(near, 0.22)
 
+    def test_shot_power_round_trip_matches_table_shot_speed(self):
+        game = make_table()
+        decel = game.height * ROLLING_DRAG
+        for charge in (0.3, 0.55, 0.9):
+            with self.subTest(charge=charge):
+                speed = game.height * (.12 + 3.05 * charge) * 1.58
+                cue_distance = (speed / 1.06) ** 2 / (2 * decel)
+                self.assertAlmostEqual(
+                    BotController.shot_power(game, cue_distance, 0.0, 0.0), charge, places=9)
+
+    def test_post_collision_direction_uses_normalized_incoming_and_impulse(self):
+        qx, qy, length = BotController._post_collision(3.0, 4.0, 1.0, 0.0)
+        # Incoming unit (0.6, 0.8), projected on the (1, 0) contact normal.
+        self.assertAlmostEqual(qx, 0.6 - BALL_IMPULSE * 0.6)
+        self.assertAlmostEqual(qy, 0.8)
+        self.assertAlmostEqual(length, math.hypot(qx, qy))
+        self.assertAlmostEqual(BotController._post_collision(0., 0., 1., 0.)[2], 0.)
+
     def test_extreme_plans_a_direct_pocket_shot(self):
         game = make_table()
         game.sunk = {2}
@@ -224,6 +265,25 @@ class CrowdedTableTests(unittest.TestCase):
         self.assertGreaterEqual(len(plan), 3)
         self.assertTrue(0.22 <= plan[2] <= 1.0)
 
+    def test_escape_shot_is_symmetric_left_and_right(self):
+        game = make_table()
+        game.sunk = set(range(3, 16))
+        white = game.white
+        left, top, right, bottom = game.bounds
+        cx, cy = (left + right) / 2, (top + bottom) / 2
+        first, second = game.icons[:2]
+        white.x, white.y = cx, cy
+        first.x, first.y = cx - 200, cy
+        second.x, second.y = cx + 200, cy
+        shot = BotController._escape_shot(game)
+        self.assertIsNotNone(shot)
+        # Mirror the rack (including its iteration order) around the cue ball.
+        first.x, second.x = cx + 200, cx - 200
+        mirrored = BotController._escape_shot(game)
+        self.assertIsNotNone(mirrored)
+        self.assertAlmostEqual(shot[1][0] + mirrored[1][0], 2 * cx, delta=1e-6)
+        self.assertAlmostEqual(shot[1][1], mirrored[1][1], delta=1e-6)
+
     def test_escape_shot_prefers_a_safe_nudge(self):
         game = make_table()
         bot = BotController(random.Random(2))
@@ -241,6 +301,29 @@ class StubSyncTests(unittest.TestCase):
         stub.shots = 1
         bot.sync(stub, 1.0)
         self.assertEqual(bot.turn, 'bot')
+
+    def test_sync_does_not_hang_when_shot_counter_drops(self):
+        bot = BotController(random.Random(1))
+        stub = SimpleNamespace(round_serial=4, shots=3, pocketed_icons=0,
+                               state='ready', white_sunk=False)
+        bot.sync(stub, 0.0)
+        stub.shots = 1
+        done = threading.Event()
+        errors = []
+
+        def worker():
+            try:
+                bot.sync(stub, 0.1)
+            except Exception as exc:
+                errors.append(exc)
+            finally:
+                done.set()
+
+        thread = threading.Thread(target=worker, daemon=True)
+        thread.start()
+        self.assertTrue(done.wait(2), 'sync hung after the shot counter dropped')
+        self.assertFalse(errors)
+        self.assertEqual(bot._shots_seen, 3)
 
 
 if __name__ == '__main__':

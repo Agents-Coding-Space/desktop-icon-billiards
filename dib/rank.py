@@ -203,12 +203,14 @@ class RankSettings:
         with self.lock:
             self.data.update(values)
             snapshot = json.dumps(self.data, ensure_ascii=False, indent=1)
-        try:
-            temporary = self.path.with_name(self.path.name + '.tmp')
-            temporary.write_text(snapshot, encoding='utf-8')
-            os.replace(temporary, self.path)
-        except OSError:
-            pass  # not persisted; the in-memory value still works for this session
+            try:
+                # A unique temp name stops concurrent writers from replacing each
+                # other's partial file; the lock keeps memory and disk in step.
+                temporary = self.path.with_name(f'{self.path.name}.{uuid.uuid4().hex}.tmp')
+                temporary.write_text(snapshot, encoding='utf-8')
+                os.replace(temporary, self.path)
+            except OSError:
+                pass  # not persisted; the in-memory value still works for this session
 
 
 def machine_hash(settings=None):

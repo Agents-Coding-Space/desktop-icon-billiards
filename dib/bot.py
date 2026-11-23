@@ -100,7 +100,7 @@ class BotController:
             self.turn = 'human'
             self.scores = {'human': 0, 'bot': 0}
         # Billiard turn rule: pocket a ball and you keep shooting; miss (or scratch) and you pass.
-        while table.shots != self._shots_seen:
+        while table.shots > self._shots_seen:
             self._last_shooter = self.turn
             self._shot_pending = True
             self._shot_gained = 0
@@ -152,8 +152,23 @@ class BotController:
         transfer = max(0.35, abs(alignment) * BALL_IMPULSE)
         cue_at_contact = target_speed / transfer if target_distance else 0.0
         speed = math.sqrt(2 * decel * cue_distance + cue_at_contact ** 2) * 1.06
-        charge = (speed / height - 0.12) / (3.05 * 1.58)
+        charge = (speed / (height * 1.58) - 0.12) / 3.05
         return min(1.0, max(0.22, charge))
+
+    @staticmethod
+    def _post_collision(wx, wy, ux, uy):
+        """Unit cue direction after a ``BALL_IMPULSE`` hit on contact normal ``(ux, uy)``.
+
+        Returns ``(qx, qy, length)``. The length is needed to compare a pocket's
+        sideways offset with its forward distance on the same scale.
+        """
+        incoming = math.hypot(wx, wy)
+        if incoming <= 1e-9:
+            return 0., 0., 0.
+        nx, ny = wx / incoming, wy / incoming
+        dot = nx * ux + ny * uy
+        qx, qy = nx - BALL_IMPULSE * dot * ux, ny - BALL_IMPULSE * dot * uy
+        return qx, qy, math.hypot(qx, qy)
 
     @staticmethod
     def _bank_candidates(table, target, pocket, others):
@@ -209,12 +224,14 @@ class BotController:
             effective = leg1 + leg2 / (RAIL_REBOUND * RAIL_REBOUND)
             score = ((cue_distance + effective / max(0.5, alignment)) / max(0.28, alignment)
                      + table.height * 1.1)  # direct rolls stay preferred when available
-            for cx, cy in table.pockets:
-                ahead = (cx - gx) * wx + (cy - gy) * wy
-                if ahead > 0:
-                    offset = abs((cx - gx) * wy - (cy - gy) * wx) / cue_distance
-                    if offset < table.pocket_radius + white.radius:
-                        score += table.height * 1.5
+            qx, qy, qlen = BotController._post_collision(wx, wy, ux, uy)
+            if qlen > 1e-9:
+                for cx, cy in table.pockets:
+                    ahead = (cx - gx) * qx + (cy - gy) * qy
+                    if ahead > 0:
+                        offset = abs((cx - gx) * qy - (cy - gy) * qx) / qlen
+                        if offset < table.pocket_radius + white.radius:
+                            score += table.height * 1.5
             candidates.append((score, (gx, gy), BotController.shot_power(table, cue_distance,
                                                                  effective, alignment)))
         return candidates
@@ -240,7 +257,7 @@ class BotController:
                 ahead = (px - gx) * ux + (py - gy) * uy
                 if ahead > 0 and abs((px - gx) * uy - (py - gy) * ux) < table.pocket_radius + white.radius:
                     danger += table.height
-            score = danger + distance / max(0.35, ux)
+            score = danger + distance
             if best is None or score < best[0]:
                 best = (score, (gx, gy), BotController.shot_power(table, distance, 0.0, 0.5))
         return best
@@ -280,12 +297,14 @@ class BotController:
                 # Short paths and full cuts are reliable; thin cuts and long rolls are not.
                 score = (cue_distance + pocket_distance / max(0.5, alignment)) / max(0.28, alignment)
                 # Avoid leaving the cue ball rolling into a pocket after the contact.
-                for cx, cy in table.pockets:
-                    ahead = (cx - gx) * wx + (cy - gy) * wy
-                    if ahead > 0:
-                        offset = abs((cx - gx) * wy - (cy - gy) * wx) / cue_distance
-                        if offset < table.pocket_radius + white.radius:
-                            score += table.height * 1.5
+                qx, qy, qlen = BotController._post_collision(wx, wy, ux, uy)
+                if qlen > 1e-9:
+                    for cx, cy in table.pockets:
+                        ahead = (cx - gx) * qx + (cy - gy) * qy
+                        if ahead > 0:
+                            offset = abs((cx - gx) * qy - (cy - gy) * qx) / qlen
+                            if offset < table.pocket_radius + white.radius:
+                                score += table.height * 1.5
                 candidate = (score, (gx, gy), self.shot_power(table, cue_distance,
                                                               pocket_distance, alignment))
                 if best is None or candidate[0] < best[0]:

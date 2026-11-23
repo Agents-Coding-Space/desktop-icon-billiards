@@ -3,11 +3,13 @@ from types import SimpleNamespace
 
 import tkinter as tk
 import unittest
+from unittest import mock
 
 import win32con
 import win32gui
 
 from dib import config
+from dib.config import fmt_pos
 from dib.bot import BotController
 from dib.hotkeys import Hotkeys
 from dib.panel import MainPanel
@@ -129,6 +131,83 @@ class ToolbarTests(unittest.TestCase):
         app.show_toolbar_eye()
         self.assertEqual(int(app.toolbar_eye_canvas.cget('width')), 36)
 
+
+    def test_window_configure_debounces_to_the_final_geometry(self):
+        app = DesktopBilliardsApp.__new__(DesktopBilliardsApp)
+        app.closing = False
+        app.root = mock.Mock()
+        app.root.after.return_value = 'after-id'
+        window = app.game_window = mock.Mock()
+        window.winfo_width.return_value = 1200
+        window.winfo_height.return_value = 600
+        window.winfo_x.return_value = -10
+        window.winfo_y.return_value = 20
+        app.window_size = (1000, 500)
+        app.settings = mock.Mock()
+        app.runner = SimpleNamespace(overlay=SimpleNamespace(request_resize=mock.Mock()))
+        event = SimpleNamespace(widget=window, width=1000, height=500)
+        app._window_configured(event)
+        app._window_configured(event)
+        self.assertEqual(app.root.after.call_count, 2)
+        self.assertEqual(app.root.after.call_args.args, (150, app._apply_window_geometry))
+        app.root.after_cancel.assert_called_with('after-id')
+        app.settings.update.assert_not_called()
+        app.runner.overlay.request_resize.assert_not_called()
+
+        window.winfo_width.return_value = 1400
+        window.winfo_height.return_value = 700
+        app._apply_window_geometry()
+        self.assertIsNone(app._window_configure_after)
+        app.settings.update.assert_called_once_with(win_x=-10, win_y=20, win_w=1400, win_h=700)
+        app.runner.overlay.request_resize.assert_called_once_with(1400, 700)
+
+    def test_pending_geometry_callback_is_cancelled_with_the_window(self):
+        app = DesktopBilliardsApp.__new__(DesktopBilliardsApp)
+        app.root = mock.Mock()
+        app._window_configure_after = 'after-id'
+        app.game_window = mock.Mock()
+        app.window_score_labels = ()
+        app._window_score_parts = None
+        app.destroy_game_window()
+        app.root.after_cancel.assert_called_once_with('after-id')
+        self.assertIsNone(app._window_configure_after)
+        self.assertIsNone(app.game_window)
+
+    def test_toggle_bot_only_queues_the_mode_change(self):
+        app = DesktopBilliardsApp.__new__(DesktopBilliardsApp)
+        bot = BotController()
+        overlay = SimpleNamespace(bot=bot, request_bot_cycle=mock.Mock())
+        app.runner = SimpleNamespace(overlay=overlay)
+        app.toggle_bot()
+        overlay.request_bot_cycle.assert_called_once_with()
+        self.assertEqual(bot.mode, 'off')
+
+    def test_tray_toggle_shows_and_hides_only_the_game_window(self):
+        app = DesktopBilliardsApp.__new__(DesktopBilliardsApp)
+        window = app.game_window = mock.Mock()
+        app.window_mode = True
+        window.winfo_ismapped.return_value = True
+        app.toggle_game_window()
+        window.withdraw.assert_called_once_with()
+        window.deiconify.assert_not_called()
+        window.winfo_ismapped.return_value = False
+        app.toggle_game_window()
+        window.deiconify.assert_called_once_with()
+        window.lift.assert_called_once_with()
+        window.withdraw.assert_called_once_with()
+        window.reset_mock()
+        app.window_mode = False
+        app.toggle_game_window()
+        window.assert_not_called()
+
+    def test_geometry_keeps_zero_and_negative_coordinates(self):
+        self.assertEqual(fmt_pos(0, 0), '+0+0')
+        self.assertEqual(fmt_pos(0, -8), '+0+-8')
+        self.assertEqual(fmt_pos(-40, 12), '+-40+12')
+        with mock.patch('dib.ui.win32api.MonitorFromPoint', return_value=1), \
+             mock.patch('dib.ui.win32api.GetMonitorInfo',
+                        return_value={'Work': (0, 0, 1920, 1080)}):
+            self.assertEqual(DesktopBilliardsApp.badge_geometry(36, 28), '36x28+1876+8')
 
     def test_window_size_is_hard_locked_to_two_to_one(self):
         self.assertEqual(DesktopBilliardsApp.locked_window_size(1000, 700, 200, 0), (1000, 500))

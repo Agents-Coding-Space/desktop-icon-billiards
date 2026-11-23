@@ -26,6 +26,21 @@ DOUYIN_URL = ''
 SITE_TEXT = ''
 WINDOW_TITLE = f'{PRODUCT_NAME} {VERSION}'
 
+
+def fmt_pos(x, y):
+    """Tk geometry position suffix; both coordinates keep an explicit sign.
+
+    ``+d`` formatting is used for non-negative values. A negative value keeps a
+    leading ``+`` separator: Tk reads a bare ``-100`` as "100 from the bottom/
+    right edge", not as the absolute coordinate -100. Callers pass integers so
+    that coordinate 0 yields ``+0`` rather than falling back to a default.
+    """
+    def signed(value):
+        return f'{value:+d}' if value >= 0 else f'+{value}'
+
+    return f'{signed(x)}{signed(y)}'
+
+
 BASE = Path(__file__).resolve().parent.parent
 ASSETS = BASE / 'assets'
 ICON_PATH = ASSETS / 'desktop-icon-billiards.ico'
