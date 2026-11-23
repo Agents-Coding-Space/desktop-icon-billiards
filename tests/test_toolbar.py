@@ -1,4 +1,5 @@
 """The compact toolbar and hotkeys must survive a withdrawn Tk window."""
+from contextlib import contextmanager
 from types import SimpleNamespace
 
 import tkinter as tk
@@ -185,20 +186,30 @@ class ToolbarTests(unittest.TestCase):
     def test_tray_toggle_shows_and_hides_only_the_game_window(self):
         app = DesktopBilliardsApp.__new__(DesktopBilliardsApp)
         window = app.game_window = mock.Mock()
+        window.winfo_id.return_value = 1234
         app.window_mode = True
-        window.winfo_ismapped.return_value = True
-        app.toggle_game_window()
-        window.withdraw.assert_called_once_with()
-        window.deiconify.assert_not_called()
-        window.winfo_ismapped.return_value = False
-        app.toggle_game_window()
-        window.deiconify.assert_called_once_with()
-        window.lift.assert_called_once_with()
-        window.withdraw.assert_called_once_with()
+        with mock.patch('dib.ui.win32gui.IsWindow', return_value=True), \
+             mock.patch('dib.ui.win32gui.GetAncestor', return_value=5678), \
+             mock.patch('dib.ui.win32gui.IsWindowVisible', return_value=True), \
+             mock.patch('dib.ui.win32gui.IsIconic', return_value=False):
+            window.winfo_ismapped.return_value = True
+            app.toggle_game_window()
+            window.withdraw.assert_called_once_with()
+            window.deiconify.assert_not_called()
+            window.winfo_ismapped.return_value = False
+            app.toggle_game_window()
+            window.deiconify.assert_called_once_with()
+            window.lift.assert_called_once_with()
+            window.withdraw.assert_called_once_with()
         window.reset_mock()
         app.window_mode = False
-        app.toggle_game_window()
-        window.assert_not_called()
+        window.winfo_ismapped.return_value = True
+        with mock.patch('dib.ui.win32gui.IsWindow', return_value=True), \
+             mock.patch('dib.ui.win32gui.GetAncestor', return_value=5678), \
+             mock.patch('dib.ui.win32gui.IsWindowVisible', return_value=True), \
+             mock.patch('dib.ui.win32gui.IsIconic', return_value=False):
+            app.toggle_game_window()
+        window.withdraw.assert_called_once_with()
 
     def test_geometry_keeps_zero_and_negative_coordinates(self):
         self.assertEqual(fmt_pos(0, 0), '+0+0')
@@ -216,6 +227,126 @@ class ToolbarTests(unittest.TestCase):
             locked = DesktopBilliardsApp.locked_window_size(width, height)
             self.assertEqual(locked[0], locked[1] * 2)
             self.assertEqual(locked[0] % 2, 0)
+
+
+class GameWindowVisibilityTests(unittest.TestCase):
+    """Tk mapping alone cannot distinguish withdrawn from natively minimized."""
+
+    def _app(self, mapped=True):
+        app = DesktopBilliardsApp.__new__(DesktopBilliardsApp)
+        window = app.game_window = mock.Mock()
+        window.winfo_id.return_value = 1234
+        window.winfo_ismapped.return_value = mapped
+        app.window_mode = True
+        return app, window
+
+    @contextmanager
+    def _win32(self, valid=True, visible=True, iconic=False):
+        with mock.patch('dib.ui.win32gui.IsWindow', return_value=valid) as is_window, \
+             mock.patch('dib.ui.win32gui.GetAncestor', return_value=5678) as get_ancestor, \
+             mock.patch('dib.ui.win32gui.IsWindowVisible', return_value=visible) as is_visible, \
+             mock.patch('dib.ui.win32gui.IsIconic', return_value=iconic) as is_iconic, \
+             mock.patch('dib.ui.win32gui.ShowWindow') as show_window:
+            yield SimpleNamespace(is_window=is_window, get_ancestor=get_ancestor,
+                                  is_visible=is_visible, is_iconic=is_iconic,
+                                  show_window=show_window)
+
+    def test_native_state_overrides_tk_mapping_in_visibility_check(self):
+        app, _window = self._app()
+        with self._win32() as win32:
+            self.assertTrue(app.game_window_visible())
+        win32.get_ancestor.assert_called_once_with(1234, win32con.GA_ROOT)
+        win32.is_visible.assert_called_once_with(5678)
+        win32.is_iconic.assert_called_once_with(5678)
+
+    def test_visible_window_is_withdrawn(self):
+        app, window = self._app()
+        with self._win32() as win32:
+            app.toggle_game_window()
+        window.withdraw.assert_called_once_with()
+        window.deiconify.assert_not_called()
+        win32.show_window.assert_not_called()
+
+    def test_natively_hidden_window_is_deiconified_without_restore(self):
+        app, window = self._app()
+        with self._win32(visible=False) as win32:
+            self.assertFalse(app.game_window_visible())
+            app.toggle_game_window()
+        window.deiconify.assert_called_once_with()
+        window.lift.assert_called_once_with()
+        window.withdraw.assert_not_called()
+        win32.show_window.assert_not_called()
+
+    def test_withdrawn_tk_window_is_deiconified_without_restore(self):
+        app, window = self._app(mapped=False)
+        with self._win32() as win32:
+            self.assertFalse(app.game_window_visible())
+            app.toggle_game_window()
+        window.deiconify.assert_called_once_with()
+        window.lift.assert_called_once_with()
+        win32.show_window.assert_not_called()
+
+    def test_iconic_window_is_restored_before_deiconify(self):
+        app, window = self._app()
+        events = []
+        window.deiconify.side_effect = lambda: events.append('deiconify')
+        with self._win32(iconic=True) as win32:
+            win32.show_window.side_effect = lambda hwnd, cmd: events.append(('show', hwnd, cmd))
+            self.assertFalse(app.game_window_visible())
+            app.toggle_game_window()
+        self.assertEqual(events, [('show', 5678, win32con.SW_RESTORE), 'deiconify'])
+        window.lift.assert_called_once_with()
+        window.withdraw.assert_not_called()
+
+    def test_invalid_hwnd_makes_no_native_visibility_or_restore_calls(self):
+        app, window = self._app()
+        with self._win32(valid=False) as win32:
+            self.assertFalse(app.game_window_visible())
+            app.toggle_game_window()
+        win32.get_ancestor.assert_not_called()
+        win32.is_visible.assert_not_called()
+        win32.is_iconic.assert_not_called()
+        win32.show_window.assert_not_called()
+        window.deiconify.assert_not_called()
+        window.lift.assert_not_called()
+        window.withdraw.assert_not_called()
+
+    def test_destroyed_tk_window_does_not_crash_tray_toggle(self):
+        app, window = self._app(mapped=False)
+        window.deiconify.side_effect = tk.TclError('window was destroyed')
+        with self._win32(visible=False) as win32:
+            app.toggle_game_window()
+        window.lift.assert_not_called()
+        win32.show_window.assert_not_called()
+
+    def test_destroyed_tk_window_does_not_crash_tray_hide(self):
+        app, window = self._app()
+        window.withdraw.side_effect = tk.TclError('window was destroyed')
+        with self._win32():
+            app.toggle_game_window()
+        window.deiconify.assert_not_called()
+
+    def test_missing_game_window_is_a_noop(self):
+        app = DesktopBilliardsApp.__new__(DesktopBilliardsApp)
+        app.game_window = None
+        app.window_mode = True
+        with self._win32() as win32:
+            self.assertFalse(app.game_window_visible())
+            app.toggle_game_window()
+        win32.is_window.assert_not_called()
+        win32.show_window.assert_not_called()
+
+    def test_window_mode_false_still_toggles_an_existing_window(self):
+        app, window = self._app()
+        app.window_mode = False
+        with self._win32() as win32:
+            app.toggle_game_window()
+        window.withdraw.assert_called_once_with()
+        win32.show_window.assert_not_called()
+        with self._win32(visible=False) as win32:
+            app.toggle_game_window()
+        window.deiconify.assert_called_once_with()
+        window.lift.assert_called_once_with()
 
 
 if __name__ == '__main__':

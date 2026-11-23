@@ -502,30 +502,55 @@ class DesktopBilliardsApp:
                     pass
 
     def game_window_visible(self):
-        """Current visibility of the optional game window (used by the tray label)."""
+        """Current native visibility of the optional game window (used by the tray label)."""
         window = getattr(self, 'game_window', None)
         if window is None:
             return False
         try:
-            return bool(window.winfo_ismapped())
+            if not window.winfo_ismapped():
+                return False
         except (tk.TclError, AttributeError):
+            return False
+        hwnd = self._game_window_hwnd(window)
+        if not hwnd:
+            return False
+        try:
+            return bool(win32gui.IsWindowVisible(hwnd)) and not win32gui.IsIconic(hwnd)
+        except win32gui.error:
             return False
 
     def hide_game_window(self):
         """Hide only the game window; the round and the toolbar are untouched."""
         window = getattr(self, 'game_window', None)
-        if window is not None:
+        if window is None:
+            return
+        try:
             window.withdraw()
+        except tk.TclError:
+            diag.log('game window withdraw failed: Tk window is destroyed')
 
     def toggle_game_window(self):
         """Tray toggle: show or hide the game window without restarting a round."""
-        if not getattr(self, 'window_mode', False):
+        window = getattr(self, 'game_window', None)
+        if window is None:
+            return
+        hwnd = self._game_window_hwnd(window)
+        if not hwnd:
+            diag.log('game window toggle skipped: invalid HWND')
             return
         if self.game_window_visible():
             self.hide_game_window()
-        elif self.game_window is not None:
-            self.game_window.deiconify()
-            self.game_window.lift()
+            return
+        try:
+            if win32gui.IsIconic(hwnd):
+                win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+        except win32gui.error:
+            pass
+        try:
+            window.deiconify()
+            window.lift()
+        except tk.TclError:
+            diag.log('game window toggle failed: Tk window is destroyed')
 
     def toggle_pin(self):
         if self.game_window is None:
@@ -548,6 +573,17 @@ class DesktopBilliardsApp:
         try:
             return int(widget.winfo_id())
         except (ValueError, TypeError, tk.TclError):
+            return 0
+
+    def _game_window_hwnd(self, window):
+        """Resolve the native top-level HWND behind a Tk window, or 0 if invalid."""
+        hwnd = self._widget_hwnd(window)
+        try:
+            if not hwnd or not win32gui.IsWindow(hwnd):
+                return 0
+            top = win32gui.GetAncestor(hwnd, win32con.GA_ROOT)
+            return int(top) if top and win32gui.IsWindow(top) else 0
+        except (win32gui.error, ValueError, TypeError):
             return 0
 
     def _window_drag_start(self, event):
