@@ -15,6 +15,9 @@ from pathlib import Path
 
 # FWF_AUTOARRANGE | FWF_SNAPTOGRID: the two view flags that snap icons to a grid.
 ARRANGE_MASK = 0x1 | 0x4
+# FWF_NOICONS: Microsoft Learn FOLDERFLAGS, fetched 2026-11-23 —
+# "The view should not display icons".
+FWF_NOICONS = 0x1000
 
 
 def _find_desktop(lookup):
@@ -261,6 +264,14 @@ class ShellDesktop:
         self._invoke(
             self.ct_view, 24, [ctypes.c_uint32, ctypes.c_uint32], mask, value
         )
+
+    def show_icons(self):
+        """Clear the hidden-icons flag without touching any other view flag."""
+        if not self.get_flags() & FWF_NOICONS:
+            return
+        self.set_flags(FWF_NOICONS, 0)
+        if self.get_flags() & FWF_NOICONS:
+            raise RuntimeError('Desktop icons could not be shown: the hidden-icons setting is still active.')
 
     def get_geometry(self):
         """Return the virtual screen rectangle plus monitor count."""

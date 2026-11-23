@@ -100,7 +100,7 @@ The game reads desktop icon thumbnails and layout through the Windows Shell and 
 
 The program checks for updates at startup, and you can also check manually; update requests carry the program name, current version and check source. Only after you explicitly enable “Global Ranking” does the game upload score data: round time, icon count, shot count, and an anonymous device id (a salted hash of the system id, not reversible). Icon names, desktop captures and file information are never uploaded. Device credentials are stored in `%APPDATA%\DesktopIconBilliards\rank.json`. The ranking service address is set by `DEFAULT_RANK_URL` in `dib/config.py` and can be overridden with the `DIB_RANK_URL` environment variable during development.
 
-On exit the desktop is restored, and an independent watchdog also tries to restore it if the game process dies abnormally. Runtime records live in `%TEMP%\DesktopIconBilliards`. If the resolution, DPI or screen layout changes during a game, the round stops and the desktop is restored. Desktop icons must be visible, and only one instance can run at a time.
+On exit the desktop is restored, and an independent watchdog also tries to restore it if the game process dies abnormally. Runtime records live in `%TEMP%\DesktopIconBilliards`. If the resolution, DPI or screen layout changes during a game, the round stops and the desktop is restored. Desktop mode automatically clears the hidden-icons setting and makes the desktop ListView visible; icons remain visible after exit. Window mode does not change desktop icons, and only one instance can run at a time.
 
 
 ## License

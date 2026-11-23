@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from dib.shell import _find_desktop, ShellDesktop, atomic_json
+from dib.shell import _find_desktop, FWF_NOICONS, ShellDesktop, atomic_json
 
 
 class DesktopDiscoveryTests(unittest.TestCase):
@@ -67,6 +67,54 @@ class DesktopDisplayNameTests(unittest.TestCase):
         with patch('dib.diag.log'):
             for _ in range(3):
                 self.assertEqual(desktop.display_name(identity), '')
+
+
+class ShowIconsTests(unittest.TestCase):
+    def desktop(self):
+        desktop = object.__new__(ShellDesktop)
+        desktop.get_flags = Mock(return_value=0)
+        desktop.set_flags = Mock()
+        return desktop
+
+    def test_visible_icons_are_a_read_only_no_op(self):
+        desktop = self.desktop()
+        desktop.get_flags.return_value = 0x1 | 0x4
+        desktop.show_icons()
+        desktop.get_flags.assert_called_once_with()
+        desktop.set_flags.assert_not_called()
+
+    def test_hidden_icons_are_shown_with_one_masked_write(self):
+        desktop = self.desktop()
+        desktop.get_flags.side_effect = [FWF_NOICONS | 0x1, 0x1]
+        desktop.show_icons()
+        self.assertEqual(desktop.get_flags.call_count, 2)
+        desktop.set_flags.assert_called_once_with(FWF_NOICONS, 0)
+
+    def test_com_errors_propagate_unchanged(self):
+        import pywintypes
+
+        error = pywintypes.com_error(-2147467259, 'Unspecified error', None, None)
+        read_failure = self.desktop()
+        read_failure.get_flags.side_effect = error
+        with self.assertRaises(pywintypes.com_error) as caught:
+            read_failure.show_icons()
+        self.assertIs(caught.exception, error)
+        read_failure.set_flags.assert_not_called()
+
+        write_failure = self.desktop()
+        write_failure.get_flags.side_effect = [FWF_NOICONS]
+        write_failure.set_flags.side_effect = error
+        with self.assertRaises(pywintypes.com_error) as caught:
+            write_failure.show_icons()
+        self.assertIs(caught.exception, error)
+        self.assertEqual(write_failure.get_flags.call_count, 1)
+
+    def test_still_hidden_after_write_raises(self):
+        desktop = self.desktop()
+        desktop.get_flags.side_effect = [FWF_NOICONS, FWF_NOICONS]
+        with self.assertRaisesRegex(RuntimeError, 'hidden-icons setting is still active'):
+            desktop.show_icons()
+        desktop.set_flags.assert_called_once_with(FWF_NOICONS, 0)
 
 
 class AtomicJournalTests(unittest.TestCase):

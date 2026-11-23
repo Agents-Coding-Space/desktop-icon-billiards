@@ -424,7 +424,7 @@ class BilliardsOverlay:
             self.fonts.append(_load_font(max(9, round(12 * dpi / 96))))
         self.was_visible = True if self.window_mode else win32gui.IsWindowVisible(self.listview)
         if not self.was_visible:
-            raise RuntimeError('Desktop icons are currently hidden; show them from the desktop context menu first.')
+            raise RuntimeError('Desktop icons could not be shown automatically; auto-show failed. Check the desktop icon window and restart the game.')
         dpi_hwnd = self.parent if self.window_mode else self.listview
         try:
             dpi = window_dpi(dpi_hwnd)

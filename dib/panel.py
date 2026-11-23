@@ -137,6 +137,7 @@ class MainPanel:
         self.shell.pack(fill='x')
         self.minimized = False
         self.restore_y = None
+        self.drag_offset = None
         grip = tk.Label(self.shell, text='⋮⋮', font=(FONT, 10), fg=MUTED, bg=BG, cursor='fleur')
         grip.pack(side='left', padx=(0, 6))
         self._draggable(grip)
@@ -199,6 +200,7 @@ class MainPanel:
         if not self.minimized:
             return
         self.minimized = False
+        self.drag_offset = None
         y = self.restore_y if self.restore_y is not None else 0
         self.restore_y = None
         self.root.geometry(f'+{self.root.winfo_x()}+{y}')
@@ -208,12 +210,15 @@ class MainPanel:
         widget.bind('<B1-Motion>', self._drag_move)
 
     def _drag_start(self, event):
+        self.drag_offset = None
         if self.minimized:
             self.restore()
             return
         self.drag_offset = (event.x_root - self.root.winfo_x(), event.y_root - self.root.winfo_y())
 
     def _drag_move(self, event):
+        if self.drag_offset is None:
+            return
         x, y = self.drag_offset
         self.root.geometry(f'+{event.x_root - x}+{event.y_root - y}')
 

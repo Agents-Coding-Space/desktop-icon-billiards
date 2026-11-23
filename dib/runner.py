@@ -7,6 +7,7 @@ from collections import deque
 
 import win32gui
 
+from . import diag
 from .display import dpi_context
 
 FRAME_SECONDS = 1 / 60

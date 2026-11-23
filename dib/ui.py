@@ -25,7 +25,7 @@ from .history import MatchHistory
 from .hotkeys import Hotkeys
 from .tray import SystemTrayIcon
 from .instance import acquire_instance, claim_instance_mutex, publish_version
-from .overlay import BilliardsOverlay
+from .overlay import BilliardsOverlay, desktop_listview
 from .panel import FONT as PANEL_FONT
 from .panel import MainPanel, ResultDialog, format_duration, show_update_dialog
 from .paths import runtime_directory
@@ -103,6 +103,41 @@ def bot_eye_text(bot, finished=False):
     if not mode:
         return ''
     return f'{mode} · {turn} · {score}' if turn else f'{mode} · {score}'
+
+
+def ensure_desktop_icons_visible(desktop):
+    """Clear the hidden-icons setting and reveal the desktop icon window."""
+    desktop.show_icons()
+    _, listview = desktop_listview()
+    if not listview or not win32gui.IsWindow(listview):
+        raise RuntimeError('Cannot find a valid desktop icon window; wait for the desktop to finish loading.')
+    if not win32gui.IsWindowVisible(listview):
+        win32gui.ShowWindow(listview, win32con.SW_SHOWNA)
+        if not win32gui.IsWindowVisible(listview):
+            raise RuntimeError('Desktop icons could not be shown: the desktop icon window is still hidden.')
+
+
+# A ShellDesktop opened before icons are shown keeps its empty COM view.
+# Reopen it for at most 2.5s after the icon window has been validated.
+DESKTOP_ITEMS_POLL_INTERVAL = 0.25
+DESKTOP_ITEMS_POLL_ATTEMPTS = 10
+
+
+def connect_desktop_items():
+    """Return a fresh ShellDesktop whose COM view already exposes icons.
+
+    Each empty read discards that instance and rebuilds the COM view. COM
+    failures propagate immediately; only the empty-list case is retried.
+    """
+    for attempt in range(DESKTOP_ITEMS_POLL_ATTEMPTS):
+        desktop = ShellDesktop()
+        if desktop.items():
+            return desktop
+        if attempt < DESKTOP_ITEMS_POLL_ATTEMPTS - 1:
+            time.sleep(DESKTOP_ITEMS_POLL_INTERVAL)
+    raise RuntimeError(
+        'Desktop icons are visible but their shell view stayed empty for 2.5s; '
+        'wait for Explorer to finish loading and try again.')
 
 
 class DesktopBilliardsApp:
@@ -576,6 +611,8 @@ class DesktopBilliardsApp:
                 # Recover a journal left behind by an earlier crash before starting.
                 self.session = LayoutSession(desktop, self.journal)
                 self.session.restore()
+                ensure_desktop_icons_visible(desktop)
+                desktop = connect_desktop_items()
                 self.session = LayoutSession(desktop, self.journal)
                 items = self.session.begin(overlay_only=True)
                 for item in items:
