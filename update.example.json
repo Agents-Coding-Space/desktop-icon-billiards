@@ -1,0 +1,11 @@
+{
+  "version": "0.1.1",
+  "download_url": "https://cnb.cool/liuxiaogang/desktop-icon-billiards/-/releases/download/v0.1.1/DesktopIconBilliards-0.1.1-win-x64.exe",
+  "notes": "Fixed the aiming line being offset relative to desktop icons under high-DPI scaling.\nImproved the manual ball-placement flow after the cue ball is potted and the restart flow; desktop icon restore on exit is more stable.\nUpdate checks no longer wait a long time without network; failure does not affect the game.",
+  "history": [
+    {
+      "version": "0.1.0",
+      "notes": "First public release: desktop icons become billiard balls — aim with the mouse, hold to power up, release to strike.\nIncludes guide lines, cushion rebounds, clear-table timing and sink statistics; the original desktop icon layout is restored on exit.\nWindows 10/11 x64 single-file executable, no Python installation required."
+    }
+  ]
+}
