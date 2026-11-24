@@ -2,10 +2,26 @@
 import math
 import unittest
 
-from PIL import Image, ImageFont, ImageStat
+from PIL import Image, ImageDraw, ImageFont, ImageStat
 
-from dib.art import (GUIDE_DARK, GUIDE_LIGHT, charge_art, cue_art, guide_art, guide_palette, pocket_art, pocket_particles,
-                     table_art, white_art)
+from dib.art import (
+    COMMENTARY_DARK,
+    COMMENTARY_LIGHT,
+    GUIDE_DARK,
+    GUIDE_LIGHT,
+    charge_art,
+    commentary_art,
+    commentary_fade,
+    commentary_timing,
+    commentary_wrap,
+    cue_art,
+    guide_art,
+    guide_palette,
+    pocket_art,
+    pocket_particles,
+    table_art,
+    white_art,
+)
 from dib.table import BilliardsMotion
 
 
@@ -149,6 +165,78 @@ class CueArtTests(unittest.TestCase):
         thin_alpha = ImageStat.Stat(thin.getchannel('A')).sum[0]
         thick_alpha = ImageStat.Stat(thick.getchannel('A')).sum[0]
         self.assertGreater(thick_alpha, thin_alpha)
+
+
+class CommentaryArtTests(unittest.TestCase):
+    PALETTE = {
+        'background': (20, 40, 30, 240),
+        'border': (100, 200, 150, 220),
+        'text': (250, 250, 245, 255),
+    }
+    LONG_LINE = ('Ủa một cơ mà rụng hai bi luôn á, em chớp mắt không kịp nhìn, '
+                 'rồi còn định đếm lại từ đầu nữa, anh em đừng có cười em nhé.')
+
+    def maximum_alpha(self, frame):
+        return frame.getchannel('A').getextrema()[1]
+
+    def test_bubble_is_rgba_and_the_anchor_becomes_a_frame_offset(self):
+        frame, x, y = commentary_art('Cơ này ổn!', palette=self.PALETTE, fade=1, anchor=(800, 500))
+        self.assertEqual(frame.mode, 'RGBA')
+        self.assertGreater(frame.width, 0)
+        self.assertGreater(frame.height, 0)
+        self.assertLessEqual(frame.width, 380)
+        self.assertEqual((x, y), (round(800 - frame.width / 2), round(500 - frame.height / 2)))
+        plain, px, py = commentary_art('Cơ này ổn!', palette=self.PALETTE, fade=1)
+        self.assertEqual((px, py), (0, 0))
+        self.assertEqual(plain.tobytes(), frame.tobytes())
+
+    def test_long_vietnamese_text_wraps_to_two_measured_lines_with_ellipsis(self):
+        font = ImageFont.load_default(size=18)
+        lines = commentary_wrap(self.LONG_LINE, font=font)
+        self.assertLessEqual(len(lines), 2)
+        self.assertTrue(lines[-1].endswith('…'), lines)
+        draw = ImageDraw.Draw(Image.new('RGBA', (1, 1)))
+        for line in lines:
+            box = draw.textbbox((0, 0), line, font=font, anchor='mm', stroke_width=1)
+            self.assertLessEqual(box[2] - box[0], 360 - 28)
+        frame = commentary_art(self.LONG_LINE, palette=self.PALETTE, fade=1)[0]
+        short = commentary_art('Ngắn thôi.', palette=self.PALETTE, fade=1)[0]
+        self.assertLessEqual(frame.height, short.height * 2)
+
+    def test_fade_zero_is_transparent_and_fade_one_is_opaque_ish(self):
+        hidden = commentary_art('Vào rồi đấy!', palette=self.PALETTE, fade=0)[0]
+        shown = commentary_art('Vào rồi đấy!', palette=self.PALETTE, fade=1)[0]
+        self.assertEqual(self.maximum_alpha(hidden), 0)
+        self.assertGreater(self.maximum_alpha(shown), 200)
+
+    def test_default_timing_fades_in_and_out_around_a_length_based_hold(self):
+        text = 'Vào rồi đấy!'
+        fade_in, hold, fade_out = commentary_timing(text)
+        self.assertEqual((fade_in, fade_out), (.18, .30))
+        self.assertTrue(3.8 <= hold <= 4.5)
+        self.assertAlmostEqual(commentary_fade(0., text), 0.)
+        self.assertAlmostEqual(commentary_fade(fade_in, text), 1.)
+        self.assertAlmostEqual(commentary_fade(fade_in + hold, text), 1.)
+        self.assertAlmostEqual(commentary_fade(fade_in + hold + fade_out, text), 0.)
+        self.assertEqual(self.maximum_alpha(commentary_art(text, palette=self.PALETTE, progress=0.)[0]), 0)
+        self.assertGreater(self.maximum_alpha(commentary_art(text, palette=self.PALETTE, progress=1.)[0]), 200)
+        self.assertGreater(commentary_timing(self.LONG_LINE)[1], commentary_timing('Ủa!')[1])
+
+    def test_empty_text_is_safe(self):
+        frame, x, y = commentary_art('', palette=self.PALETTE, fade=1)
+        self.assertEqual(frame.mode, 'RGBA')
+        self.assertGreater(frame.width, 0)
+        self.assertGreater(frame.height, 0)
+        self.assertEqual((x, y), (0, 0))
+        self.assertEqual(commentary_wrap(''), ('',))
+
+    def test_palette_colours_reach_the_bubble(self):
+        dark = commentary_art('Ủa!', palette=COMMENTARY_DARK, fade=1)[0]
+        light = commentary_art('Ủa!', palette=COMMENTARY_LIGHT, fade=1)[0]
+        point = (dark.width // 2, 6)
+        self.assertNotEqual(dark.getpixel(point), light.getpixel(point))
+        self.assertEqual(dark.getpixel(point)[:3], COMMENTARY_DARK['background'][:3])
+        self.assertEqual(light.getpixel(point)[:3], COMMENTARY_LIGHT['background'][:3])
 
 
 class FormatDurationTests(unittest.TestCase):

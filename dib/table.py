@@ -7,7 +7,8 @@ simulation, including pocket exits and the ball-in-hand state after a scratch.
 """
 import math
 from collections import defaultdict
-from dataclasses import dataclass
+from copy import deepcopy
+from dataclasses import dataclass, replace
 
 from .body import Body
 
@@ -76,6 +77,9 @@ class BilliardsMotion:
         self.tile = min(64, pitch * .70)
         self.radius = pitch * .46
         self.white_radius = min(25, self.radius * .9)
+        # Optional ball-in-hand placer. The bot installs itself here so the
+        # default re-spot stays untouched unless the bot is the placer.
+        self.white_placer = None
         self.rack = []
         for column in range(columns):
             depth = min(column + 1, count - len(self.rack))
@@ -109,10 +113,13 @@ class BilliardsMotion:
             target.impact, target.angle = source.impact, source.angle
         for name in ('white_sunk', 'round_serial', 'first_shot_at', 'finished_at',
                      'paused_at', 'shots', 'clock', 'stroke', 'power', 'charge',
-                     'break_shot', 'ready_for'):
+                     'break_shot', 'ready_for', 'hit_any_ball', 'first_target_hit',
+                     'rail_hits', 'rails_before_first_pot'):
             setattr(fresh, name, getattr(self, name))
         # The new table owns its own set; sharing it would let a resize mutate live round state.
         fresh.sunk = set(self.sunk)
+        fresh.pocket_order = deepcopy(self.pocket_order)
+        fresh._contact_guard = deepcopy(self._contact_guard)
         fresh.aim = tuple(self.aim)
         fresh.exits = {index: (new_l + (x - old_l) * sx, new_t + (y - old_t) * sy,
                                new_l + (tx - old_l) * sx, new_t + (ty - old_t) * sy, age)
@@ -125,7 +132,61 @@ class BilliardsMotion:
             fresh.state = self.state
         fresh.poses = fresh._poses()
         fresh.snapshot_sink = self.snapshot_sink
+        fresh.white_placer = self.white_placer
         return fresh
+
+    def clone_light(self):
+        """Return an independent, UI-free copy of the live round for background calculation.
+
+        Bypasses ``__init__`` so the rack is not rebuilt and no reset is published.
+        """
+        clone = BilliardsMotion.__new__(BilliardsMotion)
+        clone.sizes = deepcopy(self.sizes)
+        clone.desktop = self.desktop
+        clone.manual = self.manual
+        clone.work_area = deepcopy(self.work_area)
+        clone.bounds = deepcopy(self.bounds)
+        clone.width = self.width
+        clone.height = self.height
+        clone.pockets = deepcopy(self.pockets)
+        clone.pocket_radius = self.pocket_radius
+        clone.radius = self.radius
+        clone.white_radius = self.white_radius
+        clone.tile = self.tile
+        clone.rack = deepcopy(self.rack)
+        clone.round_serial = self.round_serial
+        # A clone is a scratch copy: reset() on it must never publish a fake snapshot.
+        clone.snapshot_sink = None
+
+        copies = {id(body): replace(body) for body in self.bodies}
+        clone.white = copies[id(self.white)]
+        clone.icons = [copies[id(body)] for body in self.icons]
+        clone.bodies = [copies[id(body)] for body in self.bodies]
+        clone.sunk = set(self.sunk)
+        clone.exits = deepcopy(self.exits)
+        clone.white_sunk = self.white_sunk
+        clone.state = self.state
+        clone.ready_for = self.ready_for
+        clone.first_shot_at = self.first_shot_at
+        clone.finished_at = self.finished_at
+        clone.paused_at = self.paused_at
+        clone.shots = self.shots
+        clone.clock = self.clock
+        clone.stroke = self.stroke
+        clone.power = self.power
+        clone.charge = self.charge
+        clone.break_shot = self.break_shot
+        clone.aim = deepcopy(self.aim)
+        clone.poses = deepcopy(self.poses)
+        clone.hit_any_ball = self.hit_any_ball
+        clone.first_target_hit = self.first_target_hit
+        clone.rail_hits = self.rail_hits
+        clone.rails_before_first_pot = self.rails_before_first_pot
+        clone.pocket_order = deepcopy(self.pocket_order)
+        clone._contact_guard = deepcopy(self._contact_guard)
+        # A background clone must never run the live bot's placement hook.
+        clone.white_placer = None
+        return clone
 
     def reset(self):
         left, top, _, bottom = self.bounds
@@ -148,6 +209,12 @@ class BilliardsMotion:
         self.power = 0.
         self.charge = 0.
         self.break_shot = True
+        self.hit_any_ball = False
+        self.first_target_hit = None
+        self.rail_hits = 0
+        self.rails_before_first_pot = None
+        self.pocket_order = []
+        self._contact_guard = set()
         self.aim = self._aim()
         self.poses = self._poses()
         if self.snapshot_sink is not None:
@@ -263,6 +330,12 @@ class BilliardsMotion:
         self.power = self._shot_speed(power)
         self.break_shot = False
         self.shots += 1
+        self.hit_any_ball = False
+        self.first_target_hit = None
+        self.rail_hits = 0
+        self.rails_before_first_pot = None
+        self.pocket_order = []
+        self._contact_guard.clear()
         if self.first_shot_at is None:
             self.first_shot_at = self.clock if now is None else now
             self.clock = max(self.clock, self.first_shot_at)
@@ -408,7 +481,9 @@ class BilliardsMotion:
             self.ready_for += dt
             if self.ready_for >= .8:
                 self.state = 'ball_in_hand'
-                self._auto_place()
+                placer = getattr(self, 'white_placer', None)
+                if placer is None or not placer(self):
+                    self._auto_place()
             return
         if self.state == 'ball_in_hand':
             return
@@ -442,6 +517,9 @@ class BilliardsMotion:
                 body.y += body.vy * h
                 if pocket is not None:
                     self.sunk.add(index)
+                    self.pocket_order.append(index)
+                    if self.rails_before_first_pot is None:
+                        self.rails_before_first_pot = self.rail_hits
                     if index == 0:
                         self.white_sunk = True
                     else:
@@ -451,6 +529,7 @@ class BilliardsMotion:
                     self._walls(body)
                     if before_wall == (body.x, body.y, body.vx, body.vy):
                         motion[id(body)] = before_wall
+            self._prune_contact_guard()
             active = self.active_bodies()
             self._collisions(active, h, motion)
             for body in active:
@@ -565,6 +644,38 @@ class BilliardsMotion:
                 if (crossing_low and speed < 0) or (not crossing_low and speed > 0):
                     setattr(body, velocity, -speed * RAIL_REBOUND)
                     body.impact = max(body.impact, min(.23, abs(speed) / self.height * .25))
+                    self.rail_hits += 1
+
+    def _body_pair(self, a, b):
+        """Return the stable body-index key for a contact between two balls."""
+        indices = {id(body): index for index, body in enumerate(self.bodies)}
+        i, j = indices[id(a)], indices[id(b)]
+        return (i, j) if i < j else (j, i)
+
+    def _prune_contact_guard(self):
+        """Forget contacts whose balls have separated or left the table."""
+        if not self._contact_guard:
+            return
+        alive = set()
+        for i, j in self._contact_guard:
+            if i in self.sunk or j in self.sunk:
+                continue
+            a, b = self.bodies[i], self.bodies[j]
+            if (a.x - b.x) ** 2 + (a.y - b.y) ** 2 < (a.radius + b.radius) ** 2:
+                alive.add((i, j))
+        self._contact_guard = alive
+
+    def _record_ball_contact(self, a, b):
+        """Record the cue's first target once per uninterrupted contact."""
+        pair = self._body_pair(a, b)
+        if pair in self._contact_guard:
+            return
+        self._contact_guard.add(pair)
+        if 0 not in pair:
+            return
+        self.hit_any_ball = True
+        if self.first_target_hit is None:
+            self.first_target_hit = pair[1] if pair[0] == 0 else pair[0]
 
     def _collisions(self, bodies, dt=0., motion=None):
         # Nearby buckets keep the number of tested pairs low on crowded desktops.
@@ -626,6 +737,7 @@ class BilliardsMotion:
         b.impact = max(b.impact, impact)
         a.angle -= ny * impact * 95
         b.angle += ny * impact * 95
+        self._record_ball_contact(a, b)
 
     def _poses(self):
         result = []

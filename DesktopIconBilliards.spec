@@ -54,7 +54,8 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=[(icon_path, 'assets'), (os.path.join(base_dir, 'assets', 'donation.jpg'), 'assets'),
-           (os.path.join(base_dir, 'assets', 'desktop-icon-billiards.png'), 'assets')],
+           (os.path.join(base_dir, 'assets', 'desktop-icon-billiards.png'), 'assets'),
+           (os.path.join(base_dir, 'assets', 'commentary_vi.json'), 'assets')],
     hiddenimports=[
         # app.pyw dispatches --watchdog to this module from inside main(); list
         # it explicitly so the helper can never fall out of the frozen bundle.

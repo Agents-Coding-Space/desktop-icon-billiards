@@ -177,6 +177,164 @@ def charge_art(percent, font, falling=False):
     return frame
 
 
+# Colour choices for the commentary bubble live with the caller: the overlay reads wallpaper
+# luma and passes either palette in. This module only measures, wraps and paints.
+COMMENTARY_DARK = {
+    'background': (12, 25, 23, 238),
+    'border': (105, 221, 179, 220),
+    'text': (231, 248, 240, 255),
+}
+COMMENTARY_LIGHT = {
+    'background': (245, 248, 246, 238),
+    'border': (45, 86, 73, 220),
+    'text': (18, 38, 33, 255),
+}
+COMMENTARY_FADE_IN = .18
+COMMENTARY_FADE_OUT = .30
+COMMENTARY_HOLD_MIN = 3.8
+COMMENTARY_HOLD_MAX = 4.5
+COMMENTARY_BUBBLE_WIDTH = 360
+
+
+def commentary_timing(text):
+    """Return ``(fade_in, hold, fade_out)`` seconds for one commentary line.
+
+    Hold grows from 3.8 s to 4.5 s as the line gets longer (16 to 48 characters).
+    """
+    length = len(str(text or '').strip())
+    share = max(0.0, min(1.0, (length - 16) / 32.0))
+    hold = COMMENTARY_HOLD_MIN + (COMMENTARY_HOLD_MAX - COMMENTARY_HOLD_MIN) * share
+    return COMMENTARY_FADE_IN, hold, COMMENTARY_FADE_OUT
+
+
+def commentary_fade(progress, text=''):
+    """Return the 0..1 opacity multiplier at ``progress`` seconds after ``text`` appeared."""
+    try:
+        elapsed = max(0.0, float(progress))
+    except (TypeError, ValueError):
+        elapsed = 0.0
+    fade_in, hold, fade_out = commentary_timing(text)
+    total = fade_in + hold + fade_out
+    if elapsed <= 0 or elapsed >= total:
+        return 0.0
+    if elapsed < fade_in:
+        return elapsed / fade_in
+    if elapsed < fade_in + hold:
+        return 1.0
+    return max(0.0, (total - elapsed) / fade_out)
+
+
+def _commentary_color(palette, *names):
+    """Read one RGB/RGBA colour from a caller palette, allowing a few key aliases."""
+    try:
+        for name in names:
+            if name not in palette:
+                continue
+            channels = tuple(round(float(value)) for value in palette[name][:4])
+            if len(channels) < 3:
+                continue
+            if len(channels) == 3:
+                channels += (255,)
+            return tuple(max(0, min(255, channel)) for channel in channels)
+    except (TypeError, ValueError) as exc:
+        raise TypeError(f'invalid commentary palette colour: {names[0]}') from exc
+    raise KeyError(f'commentary palette needs one of: {", ".join(names)}')
+
+
+def _commentary_text_width(draw, text, font):
+    if not text:
+        return 0
+    box = draw.textbbox((0, 0), text, font=font, anchor='mm', stroke_width=1)
+    return box[2] - box[0]
+
+
+def _commentary_ellipsize(draw, text, font, limit):
+    if _commentary_text_width(draw, text, font) <= limit:
+        return text
+    ellipsis = '…'
+    characters = list(text)
+    while characters and _commentary_text_width(draw, ''.join(characters) + ellipsis, font) > limit:
+        characters.pop()
+    return ''.join(characters).rstrip() + ellipsis
+
+
+def commentary_wrap(text, *, width=COMMENTARY_BUBBLE_WIDTH, font=None, padding=14):
+    """Wrap ``text`` into at most two measured lines, ellipsising any overflow.
+
+    ``font`` defaults to the Vietnamese-capable credit font. Both this helper and
+    :func:`commentary_art` size text with ``textbbox`` so the caller's font is honoured.
+    """
+    draw = ImageDraw.Draw(Image.new('RGBA', (1, 1)))
+    font = font if font is not None else _credit_font(18)
+    limit = max(80, round(width) - 2 * round(padding))
+    words = str(text or '').split()
+    if not words:
+        return ('',)
+    lines = ['']
+    for word in words:
+        candidate = f'{lines[-1]} {word}'.strip()
+        if _commentary_text_width(draw, candidate, font) <= limit:
+            lines[-1] = candidate
+        elif len(lines) < 2:
+            lines.append(word)
+        else:
+            lines[-1] = _commentary_ellipsize(draw, candidate, font, limit)
+            break
+    return tuple(_commentary_ellipsize(draw, line, font, limit) for line in lines[:2])
+
+
+def commentary_art(text, *, palette, progress=0.0, fade=None,
+                   width=COMMENTARY_BUBBLE_WIDTH, font=None, anchor=None, padding=14):
+    """Draw a commentary bubble as ``(RGBA frame, offset_x, offset_y)``.
+
+    ``palette`` is the only colour source: it needs ``background``, ``border`` and
+    ``text`` RGB/RGBA entries (``bubble``/``fill``/``bg``, ``outline``/``edge`` and
+    ``foreground``/``ink``/``fg`` are aliases). The overlay selects a dark or light
+    palette from wallpaper luma; no luma logic runs here. ``COMMENTARY_DARK`` and
+    ``COMMENTARY_LIGHT`` are ready-made caller palettes.
+
+    ``progress`` is seconds since the line appeared and drives the default envelope
+    (180 ms fade in, 3.8-4.5 s hold by text length, 300 ms fade out). Pass ``fade``
+    (0..1) to override that envelope with a caller-computed multiplier.
+    ``width`` defaults to 360 px; lines are wrapped with ``textbbox`` and clipped to
+    at most two lines with an ellipsis. ``font`` defaults to the Vietnamese-capable
+    credit font. Blit the returned frame at ``(offset_x, offset_y)`` in the caller's
+    coordinate space; ``anchor=(x, y)`` centres the bubble on that point.
+    """
+    text = text if isinstance(text, str) else ''
+    font = font if font is not None else _credit_font(18)
+    bubble_width = max(80, round(width))
+    pad = max(4, round(padding))
+    lines = commentary_wrap(text, width=bubble_width, font=font, padding=pad)
+    line_height = round(getattr(font, 'size', 18) or 18) + 6
+    gap = 3
+    bubble_height = 2 * pad + len(lines) * line_height + (len(lines) - 1) * gap
+    background = _commentary_color(palette, 'background', 'bubble', 'fill', 'bg')
+    border = _commentary_color(palette, 'border', 'outline', 'edge')
+    ink = _commentary_color(palette, 'text', 'foreground', 'ink', 'fg')
+    if fade is None:
+        multiplier = commentary_fade(progress, text)
+    else:
+        multiplier = max(0.0, min(1.0, float(fade)))
+
+    def faded(color):
+        return (*color[:3], round(color[3] * multiplier))
+
+    frame = Image.new('RGBA', (bubble_width, bubble_height))
+    draw = ImageDraw.Draw(frame)
+    draw.rounded_rectangle((0, 0, bubble_width - 1, bubble_height - 1), radius=pad,
+                           fill=faded(background), outline=faded(border), width=2)
+    for index, line in enumerate(lines):
+        if not line:
+            continue
+        y = pad + line_height / 2 + index * (line_height + gap)
+        draw.text((bubble_width / 2, y), line, font=font, anchor='mm', fill=faded(ink),
+                  stroke_width=1, stroke_fill=faded(background))
+    if anchor is None:
+        return frame, 0, 0
+    return frame, round(anchor[0] - bubble_width / 2), round(anchor[1] - bubble_height / 2)
+
+
 # Bright strokes with a dark casing on dark felt, deep strokes with a white casing on bright
 # wallpapers. The casing keeps the dashes readable whatever the background does.
 GUIDE_DARK = {'incoming': (240, 252, 247, 245), 'white': (150, 205, 255, 250), 'target': (108, 245, 183, 250),

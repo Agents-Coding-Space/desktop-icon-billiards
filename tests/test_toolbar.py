@@ -39,14 +39,15 @@ class ToolbarTests(unittest.TestCase):
     def test_all_actions_are_visible_in_one_borderless_row(self):
         calls = []
         names = ('restart', 'toggle_guide', 'toggle_rank', 'leaderboard', 'toggle_felt',
-                 'check_updates', 'quit', 'white_ball', 'toggle_bot', 'toggle_window', 'toggle_pin')
+                 'check_updates', 'quit', 'white_ball', 'toggle_bot', 'toggle_commentary',
+                 'toggle_window', 'toggle_pin')
         callbacks = {name: lambda name=name: calls.append(name) for name in names}
         panel = MainPanel(self.root, config.VERSION, callbacks, config.CREDIT)
         self.root.update()
         self.assertTrue(self.root.overrideredirect())
         self.assertEqual(set(panel.pills),
                          {'restart', 'guide', 'rank', 'leaderboard', 'felt', 'update', 'quit',
-                          'white', 'bot', 'window', 'pin', 'minimize'})
+                          'white', 'bot', 'commentary', 'window', 'pin', 'minimize'})
         positions = [pill.winfo_rooty() for pill in panel.pills.values()]
         self.assertLessEqual(max(positions) - min(positions), 2)
         self.assertLess(self.root.winfo_reqheight(), 48)
@@ -60,7 +61,8 @@ class ToolbarTests(unittest.TestCase):
     def test_minimize_parks_half_the_strip_above_screen_and_restores(self):
         callbacks = {name: (lambda name=name: None) for name in
                      ('restart', 'toggle_guide', 'toggle_rank', 'leaderboard', 'toggle_felt',
-                      'check_updates', 'quit', 'white_ball', 'toggle_bot', 'toggle_window', 'toggle_pin')}
+                      'check_updates', 'quit', 'white_ball', 'toggle_bot', 'toggle_commentary',
+                      'toggle_window', 'toggle_pin')}
         panel = MainPanel(self.root, config.VERSION, callbacks)
         self.root.update()
         self.root.geometry('+100+80')
@@ -79,7 +81,8 @@ class ToolbarTests(unittest.TestCase):
         """Regression: the score belongs to MainPanel, not the app object."""
         callbacks = {name: (lambda name=name: None) for name in
                      ('restart', 'toggle_guide', 'toggle_rank', 'leaderboard', 'toggle_felt',
-                      'check_updates', 'donate', 'quit', 'open_credit', 'white_ball', 'toggle_bot', 'toggle_window', 'toggle_pin')}
+                      'check_updates', 'donate', 'quit', 'open_credit', 'white_ball', 'toggle_bot',
+                      'toggle_commentary', 'toggle_window', 'toggle_pin')}
         panel = MainPanel(self.root, config.VERSION, callbacks, config.CREDIT)
         bot = BotController()
         bot.mode = 'easy'

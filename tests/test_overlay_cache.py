@@ -1,12 +1,15 @@
 """Collision artwork is reused without changing pixels or shared layers."""
-from collections import OrderedDict
 import queue
-from types import SimpleNamespace
 import unittest
+from collections import OrderedDict
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
+import win32con
 from PIL import Image
 
+from dib.art import COMMENTARY_DARK, COMMENTARY_LIGHT, commentary_timing
+from dib.commentary import ShotReport
 from dib.overlay import BALL_CANVAS, RING_LEVELS, BilliardsOverlay
 
 
@@ -209,6 +212,233 @@ class TableVisibilityTests(unittest.TestCase):
             self.assertTrue(overlay.felt_visible)
         self.assertEqual([call.args for call in show.call_args_list],
                          [(11, 0), (12, 4), (11, 4), (12, 0)])
+
+
+class CommentaryLayerTests(unittest.TestCase):
+    """The bubble is driven from drained reports without any Tk or real window."""
+
+    LINE = 'Ủa một cơ mà rụng hai bi luôn á, em chớp mắt không kịp nhìn.'
+
+    def report(self, *, pocketed=1):
+        return ShotReport(
+            shooter='human', pocketed=pocketed, scratched=False, hit_any_ball=True,
+            rail_hits_before_pot=1, is_combo=False, power=0.7, aim_seconds=2.0,
+            shooter_streak=1, miss_streak=0, human_score=1, bot_score=0,
+            remaining_balls=4, bot_mode='medium',
+        )
+
+    def make_overlay(self, mode='medium'):
+        overlay = object.__new__(BilliardsOverlay)
+        overlay.table = SimpleNamespace(work_area=(0, 0, 1000, 600), bounds=(120, 60, 880, 540))
+        overlay.classname = 'LayeredWindow'
+        overlay.parent = 1
+        overlay.bot = SimpleNamespace(mode=mode)
+        overlay.shot_reports = queue.SimpleQueue()
+        overlay.table_windows = {}
+        overlay.surfaces = {}
+        overlay.primary_bounds = overlay.table.work_area
+        overlay.felt_visible = True
+        overlay.hidden = False
+        overlay.commentary_enabled = True
+        overlay.commentary_engine = Mock()
+        overlay.commentary_engine.comment.return_value = self.LINE
+        overlay.commentary_state = None
+        overlay.commentary_visible = False
+        overlay.commentary_mode = mode
+        overlay.background_luma = Mock(return_value=30)
+        overlay.present = Mock()
+        overlay.position_layer = Mock()
+        return overlay
+
+    def test_draw_invokes_the_commentary_layer_after_round_actions(self):
+        overlay = self.make_overlay()
+        overlay.window_mode = False
+        overlay.desktop = SimpleNamespace(get_geometry=Mock(return_value=overlay.table.work_area))
+        overlay.geometry = overlay.table.work_area
+        overlay.monitor_state = ()
+        overlay.monitor_checked = 1.0
+        overlay.resize_request = None
+        overlay.want_hidden = False
+        overlay.want_felt = True
+        overlay.hidden = False
+        overlay.transition = None
+        overlay.restart_requested = Mock()
+        overlay.restart_requested.is_set.return_value = False
+        overlay.pointer = SimpleNamespace()
+        overlay.table.step = Mock()
+        overlay.update_pointer = Mock()
+        overlay.draw_balls = Mock()
+        overlay.draw_table = Mock()
+        overlay.draw_guide = Mock()
+        overlay.draw_charge = Mock()
+        overlay.draw_round_actions = Mock()
+        overlay.draw_commentary = Mock()
+        with patch('dib.overlay.win32api.GetAsyncKeyState', return_value=0):
+            overlay.draw(1.0, 0.016, (10, 10))
+        overlay.draw_commentary.assert_called_once_with(1.0)
+
+    def test_every_drained_report_feeds_the_engine_once(self):
+        overlay = self.make_overlay()
+        reports = [self.report(pocketed=1), self.report(pocketed=0)]
+        for report in reports:
+            overlay.shot_reports.put(report)
+        overlay.commentary_engine.comment.side_effect = [self.LINE, None]
+        frame = Image.new('RGBA', (360, 80))
+        with patch('dib.overlay.commentary_art', return_value=(frame, 0, 0)) as art, \
+                patch('dib.overlay.win32gui.CreateWindowEx', return_value=77), \
+                patch('dib.overlay.win32api.GetModuleHandle', return_value=1):
+            overlay.draw_commentary(10.0)
+        self.assertEqual(overlay.commentary_engine.comment.call_count, 2)
+        for call, report in zip(overlay.commentary_engine.comment.call_args_list, reports, strict=True):
+            self.assertIs(call.args[0], report)
+            self.assertEqual(call.kwargs, {
+                'now': 10.0, 'enabled': True, 'hidden': False, 'disabled': False,
+                'bot_mode': 'medium', 'bot_on': True,
+            })
+        self.assertEqual(overlay.table_windows, {'commentary': 77})
+        self.assertEqual(art.call_args.kwargs['progress'], 0.0)
+        self.assertIs(art.call_args.kwargs['palette'], COMMENTARY_LIGHT)
+
+    def test_explicit_silence_flags_suppress_the_bubble(self):
+        cases = (
+            {'mode': 'off', 'expected': {'bot_mode': 'off', 'bot_on': False}},
+            {'hidden': True, 'expected': {'hidden': True}},
+            {'felt_visible': False, 'expected': {'disabled': True}},
+            {'commentary_enabled': False, 'expected': {'enabled': False}},
+        )
+        for case in cases:
+            with self.subTest(case=case):
+                overlay = self.make_overlay(mode=case.get('mode', 'medium'))
+                for name in ('hidden', 'felt_visible', 'commentary_enabled'):
+                    if name in case:
+                        setattr(overlay, name, case[name])
+                overlay.commentary_mode = overlay.bot.mode
+                overlay.shot_reports.put(self.report())
+                with patch('dib.overlay.commentary_art', side_effect=AssertionError('art while silent')), \
+                        patch('dib.overlay.win32gui.CreateWindowEx',
+                              side_effect=AssertionError('window while silent')), \
+                        patch('dib.overlay.win32gui.ShowWindow') as show:
+                    overlay.draw_commentary(1.0)
+                flags = overlay.commentary_engine.comment.call_args.kwargs
+                for name, value in case['expected'].items():
+                    self.assertEqual(flags[name], value)
+                self.assertIsNone(overlay.commentary_state)
+                self.assertFalse(overlay.commentary_visible)
+                self.assertNotIn('commentary', overlay.table_windows)
+                show.assert_not_called()
+
+    def test_mode_change_and_missing_asset_leave_no_bubble(self):
+        overlay = self.make_overlay(mode='easy')
+        overlay.commentary_mode = 'hard'
+        overlay.commentary_state = (self.LINE, 1.0, 4.0)
+        overlay.commentary_visible = True
+        overlay.table_windows['commentary'] = 77
+        with patch('dib.overlay.win32gui.ShowWindow') as show:
+            overlay.hide_commentary()
+        show.assert_called_once_with(77, win32con.SW_HIDE)
+        self.assertIsNone(overlay.commentary_state)
+        self.assertFalse(overlay.commentary_visible)
+
+        no_engine = self.make_overlay()
+        no_engine.commentary_engine = None
+        no_engine.shot_reports.put(self.report())
+        with patch('dib.overlay.commentary_art', side_effect=AssertionError('art without an asset')), \
+                patch('dib.overlay.win32gui.CreateWindowEx',
+                      side_effect=AssertionError('window without an asset')):
+            no_engine.draw_commentary(1.0)
+        self.assertNotIn('commentary', no_engine.table_windows)
+
+    def test_lifecycle_paths_hide_an_active_bubble(self):
+        overlay = self.make_overlay()
+        overlay.window_mode = True
+        overlay.windows = []
+        overlay.table.pause = Mock()
+        overlay.table_windows.update({'rail': 3, 'pockets': 4})
+
+        def activate():
+            overlay.commentary_state = (self.LINE, 1.0, 4.0)
+            overlay.commentary_visible = True
+
+        with patch('dib.overlay.win32gui.ShowWindow'):
+            activate()
+            overlay.set_hidden(True, 1.0)
+        self.assertIsNone(overlay.commentary_state)
+        self.assertFalse(overlay.commentary_visible)
+
+        activate()
+        with patch('dib.overlay.win32gui.ShowWindow'):
+            overlay.set_felt(False)
+        self.assertIsNone(overlay.commentary_state)
+        self.assertFalse(overlay.commentary_visible)
+
+        activate()
+        overlay.commentary_engine.reset = Mock()
+        overlay.reset_shot_reports()
+        overlay.commentary_engine.reset.assert_called_once()
+        self.assertIsNone(overlay.commentary_state)
+        self.assertFalse(overlay.commentary_visible)
+
+        activate()
+        overlay.hide_commentary = Mock()
+        overlay.clear_table = Mock()
+        overlay.close()
+        overlay.hide_commentary.assert_called_once()
+        overlay.clear_table.assert_called_once()
+
+    def test_palette_follows_wallpaper_luma_at_the_bubble_anchor(self):
+        frame = Image.new('RGBA', (360, 80))
+        for luma, palette in ((230, COMMENTARY_DARK), (60, COMMENTARY_LIGHT)):
+            with self.subTest(luma=luma):
+                overlay = self.make_overlay()
+                overlay.background_luma.return_value = luma
+                overlay.shot_reports.put(self.report())
+                with patch('dib.overlay.commentary_art', return_value=(frame, 0, 0)) as art, \
+                        patch('dib.overlay.win32gui.CreateWindowEx', return_value=77), \
+                        patch('dib.overlay.win32api.GetModuleHandle', return_value=1):
+                    overlay.draw_commentary(1.0)
+                self.assertIs(art.call_args.kwargs['palette'], palette)
+                sample_x, sample_y = overlay.background_luma.call_args.args
+                self.assertGreater(sample_x, 700)
+                self.assertLess(sample_y, 60)
+
+    def test_bubble_expires_after_its_fade_window(self):
+        overlay = self.make_overlay()
+        overlay.shot_reports.put(self.report())
+        frame = Image.new('RGBA', (360, 80))
+        duration = sum(commentary_timing(self.LINE))
+        with patch('dib.overlay.commentary_art', return_value=(frame, 0, 0)) as art, \
+                patch('dib.overlay.win32gui.CreateWindowEx', return_value=77), \
+                patch('dib.overlay.win32gui.ShowWindow') as show, \
+                patch('dib.overlay.win32api.GetModuleHandle', return_value=1):
+            overlay.draw_commentary(5.0)
+            self.assertTrue(overlay.commentary_visible)
+            overlay.draw_commentary(5.0 + duration)
+        show.assert_called_once_with(77, win32con.SW_HIDE)
+        self.assertEqual(art.call_count, 1)
+        self.assertIsNone(overlay.commentary_state)
+        self.assertFalse(overlay.commentary_visible)
+
+    def test_lifecycle_registers_z_orders_and_cleans_the_layer(self):
+        overlay = self.make_overlay()
+        overlay.table_windows.update({'guide': 1, 'pockets': 2, 'rail': 3})
+        overlay.shot_reports.put(self.report())
+        frame = Image.new('RGBA', (360, 80))
+        with patch('dib.overlay.commentary_art', return_value=(frame, 0, 0)), \
+                patch('dib.overlay.win32gui.CreateWindowEx', return_value=77), \
+                patch('dib.overlay.win32api.GetModuleHandle', return_value=1), \
+                patch.object(overlay, 'position_layer') as position:
+            overlay.draw_commentary(1.0)
+            position.assert_called_once_with(77, win32con.HWND_TOP, win32con.SWP_SHOWWINDOW)
+            position.reset_mock()
+            overlay.stack_table_windows()
+        position.assert_any_call(77, win32con.HWND_TOP)
+        with patch('dib.overlay.win32gui.IsWindow', return_value=True), \
+                patch('dib.overlay.win32gui.DestroyWindow') as destroy:
+            overlay.clear_table()
+        destroy.assert_any_call(77)
+        self.assertNotIn('commentary', overlay.table_windows)
+        self.assertIsNone(overlay.commentary_state)
+        self.assertFalse(overlay.commentary_visible)
 
 
 if __name__ == '__main__':

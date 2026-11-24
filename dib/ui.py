@@ -188,6 +188,8 @@ class DesktopBilliardsApp:
             except (OSError, ValueError, Image.DecompressionBombError):
                 _write_log('white-ball.log', traceback.format_exc())
         self.felt_enabled = bool(self.settings.get('felt', True))
+        self.commentary_enabled = bool(self.settings.get('commentary', True))
+        self._commentary_ack_serial = 0
         self.window_mode = bool(self.settings.get('window_mode', False))
         self.game_window = None
         self.window_size = None
@@ -206,6 +208,7 @@ class DesktopBilliardsApp:
             'leaderboard': self.show_leaderboard,
             'white_ball': self.show_white_ball,
             'toggle_bot': self.toggle_bot,
+            'toggle_commentary': self.toggle_commentary,
             'toggle_window': self.toggle_window_mode,
             'toggle_pin': self.toggle_pin,
         })
@@ -268,6 +271,7 @@ class DesktopBilliardsApp:
         self.panel.set_look('pin', 'Pinned' if self.window_pinned else 'Pin',
                             'on' if self.window_pinned else 'ghost')
         self.refresh_bot_button()
+        self.refresh_commentary_button()
         self.refresh_window_score()
 
     def toggle_bot(self):
@@ -297,6 +301,34 @@ class DesktopBilliardsApp:
         panel.set_look('bot', text, 'on' if bot.enabled and not self.table_finished() else 'ghost')
         panel.remaining_title.set(bot.score_text() if bot.enabled else 'Left')
         self.paint_toolbar_eye()
+
+    def toggle_commentary(self):
+        """Persist the choice and queue it; the animation thread applies it and acks the serial."""
+        self.commentary_enabled = not bool(self.commentary_enabled)
+        self.settings.update(commentary=self.commentary_enabled)
+        overlay = self.runner.overlay if getattr(self, 'runner', None) is not None else None
+        if overlay is not None:
+            overlay.request_commentary_toggle(self.commentary_enabled)
+
+    def refresh_commentary_button(self):
+        panel = getattr(self, 'panel', None)
+        if panel is None:
+            return
+        overlay = self.runner.overlay if getattr(self, 'runner', None) is not None else None
+        if overlay is None:
+            enabled = bool(getattr(self, 'commentary_enabled', True))
+        else:
+            enabled = bool(getattr(overlay, 'commentary_ack_enabled', True))
+        panel.set_look('commentary',
+                       'Bình luận On' if enabled else 'Bình luận Off',
+                       'on' if enabled else 'off')
+
+    def sync_commentary_ack(self, overlay):
+        """Repaint the pill only after the animation thread acknowledges the applied value."""
+        ack = getattr(overlay, 'commentary_ack_serial', None)
+        if ack != getattr(self, '_commentary_ack_serial', None):
+            self._commentary_ack_serial = ack
+            self.refresh_commentary_button()
 
     def table_finished(self):
         return bool(self.round_snapshot is not None and self.round_snapshot.state == 'finished')
@@ -713,6 +745,9 @@ class DesktopBilliardsApp:
                     overlay.want_felt = self.felt_enabled
                     overlay.request_white_texture(self.white_texture)
                 self.watchdog = self.spawn_watchdog()
+            # Queue the saved choice instead of writing overlay state from Tk.
+            self._commentary_ack_serial = 0
+            overlay.request_commentary_toggle(getattr(self, 'commentary_enabled', True))
             self.runner = BilliardsRunner(overlay)
             self.runner.start()
             self.deadline = time.monotonic() + 30
@@ -782,6 +817,7 @@ class DesktopBilliardsApp:
                 if ack != getattr(self, '_bot_ack_serial', None):
                     self._bot_ack_serial = ack
                     self.refresh_bot_button()
+                self.sync_commentary_ack(overlay)
                 try:
                     while True:
                         url = overlay.link_requests.get_nowait()

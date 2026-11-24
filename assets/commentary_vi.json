@@ -1,0 +1,230 @@
+{
+  "finished": {
+    "easy": [
+      "Hết bi rồi ha, em còn đang định đếm lại từ đầu luôn.",
+      "Ván này xong thật rồi chứ? Em chớp mắt một cái là bàn sạch quá!"
+    ],
+    "medium": [
+      "Tàn cuộc rồi, ngồi lại một ván nữa cho vui anh em nhé.",
+      "Bàn sạch như mới lau, ai dọn bàn người đó được mời một ly nước."
+    ],
+    "hard": [
+      "Kết thúc rồi đấy, lời khen em cất dần cho ván sau.",
+      "Sạch bàn thế này thì hết cớ ngắm lâu nữa rồi."
+    ],
+    "extreme": [
+      "Hết bi rồi, đừng có bảo chưa kịp khởi động.",
+      "Ván xong rồi, phát sau em không nhường ai đâu."
+    ]
+  },
+  "scratch": {
+    "easy": [
+      "Ui trời, bi trắng lại chui lỗ rồi, em giật mình theo luôn.",
+      "Bi mục tiêu chưa ăn, bi trắng lại đi trước một bước. Em đếm mãi vẫn thấy thiếu."
+    ],
+    "medium": [
+      "Bi trắng vào lỗ trước cả bi đích, ván này đang bị lệch kịch bản rồi.",
+      "Tặng nhau một quả đặt bi miễn phí, anh em mình đừng càm ràm.",
+      "Lại thêm một lần bi trắng đi du lịch, lỗ này có từ tính hay sao?"
+    ],
+    "hard": [
+      "Lỗ kia hút bi trắng hút quen rồi, chỉ khác mỗi lần là ai đẩy vào thôi.",
+      "Ăn bi cái mà tưởng ăn bi đích, tinh thần đấy, kỹ thuật thì để sau.",
+      "Đặt bi lại đi đã, ngắm thêm năm phút cũng không cứu được pha này."
+    ],
+    "extreme": [
+      "Bi trắng chui lỗ, gọi là tự hủy có quá lời không?",
+      "Phát này coi như nộp điểm cho đối phương, đừng có đổ tại bàn nghiêng.",
+      "Cơ sau mà còn thả bi trắng vào lỗ, em đổi luôn cái bàn cho nhanh."
+    ]
+  },
+  "airball": {
+    "easy": [
+      "Ủa, cây cơ vừa rồi đi đâu thế, em không thấy bi nó nhúc nhích luôn.",
+      "Em tưởng đánh trúng bi chứ, hóa ra chỉ nghe tiếng gió thôi à?"
+    ],
+    "medium": [
+      "Đánh gió phát này chuẩn luôn, bi mục tiêu còn chưa kịp giật mình.",
+      "Cơ đi một mình, bi đứng yên, coi như hai bên chưa gặp nhau.",
+      "Quán này đánh kiểu gì vậy, bi chưa chạm mà lỗ đã nhường rồi à?"
+    ],
+    "hard": [
+      "Ngắm lâu thế mà bi chưa biết có người vừa đánh, tội nghiệp quả cơ.",
+      "Pha đi vào lòng đất, bi mục tiêu còn đang đợi được chạm mặt.",
+      "Lực thì có, hướng thì đang đi du lịch, thế là đủ cho một câu cà khịa."
+    ],
+    "extreme": [
+      "Không chạm bi nào mà vẫn tự tin gáy, giỏi thật.",
+      "Cơ trượt không cần bàn, chỉ cần một chút tự tin thừa là đủ.",
+      "Lần sau nhắm vào cái bàn trước đã, rồi tính đến bi."
+    ]
+  },
+  "multi_pot": {
+    "easy": [
+      "Ủa một cơ mà rụng hai bi luôn á, em chớp mắt không kịp nhìn.",
+      "Em đếm một, hai... xong bàn còn thiếu mấy cái icon nữa rồi!"
+    ],
+    "medium": [
+      "Một cơ rụng đôi, đúng kiểu bổ củi ngã cả hai quả.",
+      "Nhắm một đằng ăn một nẻo, trường phái này em chưa học được.",
+      "Đẹp đấy, hai bi cùng về lỗ như có lịch hẹn trước."
+    ],
+    "hard": [
+      "Hên cũng phải có nghệ, nhưng pha này nghệ đang nhường hên dẫn đầu.",
+      "Đánh thế cũng vô, lỗ hôm nay đang chiều ai đó rõ ràng.",
+      "Hai bi một lèo, đừng vội nhận là đẳng cấp, chờ phát sau đã."
+    ],
+    "extreme": [
+      "Hai bi cùng lúc, đừng bảo là tại lỗ rộng.",
+      "Ăn đôi ngon đấy, nhưng em chưa thấy gì khó ở đây cả.",
+      "Cơ này được một điểm, đừng tưởng em đang khen nhiều đấy."
+    ]
+  },
+  "shooter_streak": {
+    "easy": [
+      "Cơ này nóng quá rồi, em ngồi xem còn thấy hết cả hơi.",
+      "Ủa cứ ăn rồi ăn lại, em tưởng bàn đang tự dọn cơ."
+    ],
+    "medium": [
+      "Tay đang vào gôn rồi, ai cầm cơ lúc này cũng được mời trà.",
+      "Chuỗi này đẹp đấy, nhưng em vẫn chờ pha hụt đầu tiên để trêu.",
+      "Ăn liền ba cái, quán bi-a hôm nay có người mang vía theo rồi."
+    ],
+    "hard": [
+      "Cơ đang đỏ, nhưng lỗ cũng đang có tâm lý chiều chuỗi này.",
+      "Ba phát liên tiếp, khen thì khen, đừng có đứng dậy nhận danh hiệu ngay.",
+      "Thấy chưa, lúc nãy ai bảo tay mới vào nghề? Giờ nói lại đi."
+    ],
+    "extreme": [
+      "Ba cơ liền rồi đấy, cố giữ nhịp đi, đừng để em cười lúc bạn hụt.",
+      "Ổn đấy, nhưng chuỗi ba phát chưa đủ để em gọi là cơ thủ.",
+      "Đừng có phách quá sớm, em còn đang chờ pha trượt đầu tiên."
+    ]
+  },
+  "miss_streak": {
+    "easy": [
+      "Hụt ba cơ rồi, em cũng thấy hụt hết cả hơi theo.",
+      "Lần trước em nghĩ tại xui, lần này em bắt đầu nghi tại... cơ."
+    ],
+    "medium": [
+      "Tịt ngòi hơi lâu rồi, ngồi xuống uống ngụm nước rồi đánh lại nhé.",
+      "Đổi chuột đi hay đổi chỗ ngồi đi, chứ đổ tại bàn nghiêng nghe không được.",
+      "Ba lần liên tiếp rồi, lỗ vẫn kiên nhẫn chờ, chỉ có tay cơ là bối rối."
+    ],
+    "hard": [
+      "Chuỗi trượt này đều đặn quá, đúng kiểu luyện có bài bản.",
+      "Ngắm kỹ rồi đánh hụt, công sức bỏ vào góc nhìn nhiều hơn góc vào lỗ.",
+      "Ba phát không ăn, lỗ đang hỏi thăm tay cơ xem còn nhớ đường không."
+    ],
+    "extreme": [
+      "Ba cơ trượt liên tiếp, đừng bảo em không cảnh báo từ đầu.",
+      "Tay này đang đi vào chuỗi kỷ lục, kỷ lục trượt.",
+      "Trượt ba phát mà vẫn giữ mặt tỉnh queo, chịu được áp lực đấy."
+    ]
+  },
+  "overthink": {
+    "easy": [
+      "Ngắm mãi em cũng ngố theo, mà bi thì vẫn đứng yên chỗ cũ.",
+      "Em đếm đến mười hai rồi, bi chắc cũng mệt vì chờ quá lâu."
+    ],
+    "medium": [
+      "Đo góc, căn lực, nín thở... rồi đánh trượt, đúng là nghi thức riêng.",
+      "Ngắm thêm năm giây nữa chắc bi tự lăn vì chờ sốt ruột.",
+      "Lâu thế mà vẫn chưa xong, quán bi-a đóng cửa mất rồi này."
+    ],
+    "hard": [
+      "Mười hai giây ngắm mà vẫn trượt, não bộ đang làm việc riêng với cây cơ.",
+      "Tính toán kỹ quá thành ra bi không dám đi, tại nó cũng sợ trách.",
+      "Ngắm lâu thế thì chỉ được một điều: hết giờ vẫn chưa ăn."
+    ],
+    "extreme": [
+      "Ngắm mười hai giây rồi trượt, kỷ lục suy nghĩ vô dụng đấy.",
+      "Cầm cơ lâu thế, em tưởng tay đang dán chặt lấy thành bàn rồi.",
+      "Tính toán nhiều quá hóa ra vẫn trượt, giỏi thật, giỏi làm mất thời gian."
+    ]
+  },
+  "lead_change": {
+    "easy": [
+      "Ủa điểm đổi chủ rồi hả, em còn đang lưu bảng cũ kìa.",
+      "Vừa dẫn vừa bị qua mặt, bàn này thay đổi nhanh hơn em thay tất."
+    ],
+    "medium": [
+      "Cờ đã lật, ván này đang kịch tính hơn cả phim chiếu rạp.",
+      "Dẫn trước bao lâu chưa kịp hưởng, giờ phải đuổi lại từ đầu.",
+      "Đổi dẫn rồi đấy, anh em ngồi xem còn thấy nghẹt thở."
+    ],
+    "hard": [
+      "Dẫn rồi mất, cũng nhanh thôi, tại điểm không có chỗ để đứng yên.",
+      "Lật dẫn phát này đẹp đấy, nhưng giữ được bao lâu mới là chuyện đáng nói.",
+      "Tưởng đã chắc ăn, giờ ngồi đếm lại từ đầu đi."
+    ],
+    "extreme": [
+      "Dẫn trước rồi tụt, đúng là chỉ cần một pha là bay màu.",
+      "Lật dẫn đấy, đừng mừng quá sớm, em còn đang trông chờ pha hụt.",
+      "Giờ mới bắt đầu thay đổi ngôi đầu, em vẫn đứng trên đỉnh."
+    ]
+  },
+  "endgame": {
+    "easy": [
+      "Còn ít bi quá rồi, tim em đập theo từng cú lăn.",
+      "Mấy cái icon cuối cùng này trông như đang run rồi."
+    ],
+    "medium": [
+      "Cơ quyết định rồi đây, tay đừng run nhé anh em.",
+      "Còn hai bi thôi, lỗ nào cũng đang được chú ý đặc biệt.",
+      "Vào đoạn căng rồi, uống ngụm nước rồi đánh tiếp."
+    ],
+    "hard": [
+      "Hai bi cuối, lúc này mới là lúc tay với mắt phải cùng làm việc.",
+      "Sắp xong bàn rồi, lời khen em vẫn chưa chịu buông ra.",
+      "Ít bi thế này mà vẫn còn chỗ để trượt, lạ thật."
+    ],
+    "extreme": [
+      "Còn hai bi, đừng có run, em đang nhìn từng cử động đấy.",
+      "Đoạn cuối rồi, pha này mà hụt là mang tiếng cả ván.",
+      "Sắp sạch bàn rồi, nhưng đừng tưởng em sẽ nhường cái cuối cùng."
+    ]
+  },
+  "single_pot": {
+    "easy": [
+      "Ủa vào một bi rồi, em vỗ tay hơi sớm một chút.",
+      "Một cái icon bay vào lỗ, em nhìn theo mãi không rời mắt."
+    ],
+    "medium": [
+      "Một bi cũng được, cứ đều đều thế là ván đang trôi tốt.",
+      "Vào rồi đấy, nhưng em vẫn đang chờ pha đẹp hơn.",
+      "Cơ này ổn, ăn một cái rồi ngồi tính tiếp."
+    ],
+    "hard": [
+      "Một bi, đúng mức cần thiết để không phải khen quá lời.",
+      "Vào được cái một, đừng tưởng lỗ đang dễ dãi mãi.",
+      "Pha này tạm ổn, em đang chờ xem có lần sau không."
+    ],
+    "extreme": [
+      "Một bi thôi cũng đáng mừng à? Tiêu chí của bạn thấp thật.",
+      "Ăn một cái rồi đứng hình, đừng để em phải chờ lâu thế.",
+      "Được một bi, coi như vừa đủ để em chưa phải cà khịa."
+    ]
+  },
+  "ordinary_miss": {
+    "easy": [
+      "Lệch một chút thôi, em tưởng sắp trúng rồi chứ.",
+      "Bi đi qua lỗ mà không vào, em còn định reo lên mất."
+    ],
+    "medium": [
+      "Lỗ to thế mà bi vẫn lách qua được, tài thật đấy.",
+      "Cơ này đánh lấy cảm giác thôi đúng không, chứ ai lại đánh thế?",
+      "Trượt nhẹ thôi, ngồi lại căn lại góc rồi đi tiếp."
+    ],
+    "hard": [
+      "Lệch có nửa gang tay, cố lên, sắp trúng... thành bàn rồi.",
+      "Ngắm kỹ thế mà kết quả vẫn là bi lăn về phía khác, phí một nhịp ngắm.",
+      "Cơ đi lạc, lỗ không nhận, thế là hết chuyện để bàn."
+    ],
+    "extreme": [
+      "Trượt phát này em ghi nhớ đấy, cơ sau đừng có run tay nữa.",
+      "Một cái lỗ cũng không vào, đúng là khó ở chỗ dễ nhất.",
+      "Cơ vừa rồi em cho điểm về nỗ lực, điểm kỹ thuật thì xin kiếu."
+    ]
+  }
+}

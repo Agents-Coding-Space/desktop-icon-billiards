@@ -11,6 +11,7 @@ import math
 import os
 import platform
 import queue
+import random
 import struct
 import threading
 import time
@@ -25,11 +26,27 @@ import win32process
 from PIL import Image, ImageDraw, ImageFont
 
 from . import diag
-from .bot import BotController
-from .config import CREDIT, REPOSITORY_URL
-from .art import credit_layout, charge_art, cue_art, guide_art, pocket_art, pocket_particles, table_art, white_art
-from .art import round_actions_art, round_actions_layout
+from .art import (
+    COMMENTARY_BUBBLE_WIDTH,
+    COMMENTARY_DARK,
+    COMMENTARY_LIGHT,
+    charge_art,
+    commentary_art,
+    commentary_timing,
+    credit_layout,
+    cue_art,
+    guide_art,
+    pocket_art,
+    pocket_particles,
+    round_actions_art,
+    round_actions_layout,
+    table_art,
+    white_art,
+)
 from .balls import MAX_BALLS, ball_summary, fill_sources, priority_order
+from .bot import BotController
+from .commentary import CommentaryEngine, load_commentary_lines
+from .config import CREDIT, REPOSITORY_URL
 from .display import dpi_context, monitors, window_dpi
 from .shell import ShellDesktop
 from .table import MIN_SHOT_CHARGE, BilliardsMotion
@@ -42,6 +59,9 @@ RING_LEVELS = 6
 MAX_IMPACT = .23  # the largest ``impact`` value the table produces
 GUIDE_INTERVAL = 1 / 30  # the aim guide is redrawn at most this often
 LUMA_CELL = 8  # wallpaper pixels per cell of the brightness map
+COMMENTARY_RNG_SEED = 0xC0FFEE  # stable line selection across sessions
+COMMENTARY_MARGIN = 12
+COMMENTARY_BRIGHT_LUMA = 150  # bright wallpaper gets a dark bubble, and vice versa
 WS_EX_LAYERED = 0x80000
 WS_EX_NOACTIVATE = 0x08000000
 SM_SWAPBUTTON = 23
@@ -296,6 +316,9 @@ class TablePointer:
         self.held_since = None
         self.charge_origin = None
         self.charge_falling = False
+        # Input metadata for the report assembled when this shot settles.
+        self.aim_seconds = 0.0
+        self.shot_power = 0.0
 
     def update(self, game, now, x, y, down, over_table):
         if over_table:
@@ -312,10 +335,13 @@ class TablePointer:
             power = 1 - abs(phase - 1)
             game.charge = power
             if not down:
+                held = self.held_since
                 self.held_since = None
                 self.charge_origin = None
                 if over_table:
-                    game.shoot(max(MIN_SHOT_CHARGE, power), now)
+                    self.aim_seconds = max(0., now - held) if held is not None else 0.
+                    self.shot_power = max(MIN_SHOT_CHARGE, power)
+                    game.shoot(self.shot_power, now)
                 else:
                     game.charge = 0.0
         self.was_down = down
@@ -330,6 +356,14 @@ class BilliardsOverlay:
     move_drag = None
     window_position = None
     on_desktop = False
+    commentary_engine = None
+    commentary_enabled = True
+    commentary_state = None
+    commentary_visible = False
+    commentary_mode = None
+    commentary_command_serial = 0
+    commentary_ack_serial = 0
+    commentary_ack_enabled = True
 
     def __init__(self, desktop, items, *, window_parent=None, titlebar_height=0):
         self.desktop = desktop
@@ -355,6 +389,11 @@ class BilliardsOverlay:
         self.bot_command_serial = 0
         self.bot_ack_serial = 0
         self.bot_ack_mode = 'off'
+        # Commentary switches are queued on Tk and applied on the animation thread.
+        self.commentary_commands = queue.SimpleQueue()
+        self.commentary_command_serial = 0
+        self.commentary_ack_serial = 0
+        self.commentary_ack_enabled = True
         self.on_desktop = False
         self.round_actions = queue.SimpleQueue()
         self.round_actions_key = None
@@ -380,6 +419,21 @@ class BilliardsOverlay:
         self.restart_requested = threading.Event()
         self.pointer = TablePointer()
         self.bot = BotController()
+        # Reports are value-only ShotReport instances; the live table stays on this thread.
+        self.shot_reports = queue.SimpleQueue()
+        self.bot.report_sink = self.shot_reports.put
+        self.bot.report_reset_sink = self.reset_shot_reports
+        # A missing or malformed asset leaves no engine and therefore no bubble.
+        try:
+            lines = load_commentary_lines()
+        except (OSError, TypeError, ValueError):
+            lines = {}
+        self.commentary_engine = (CommentaryEngine(lines, rng=random.Random(COMMENTARY_RNG_SEED))
+                                  if lines else None)
+        self.commentary_enabled = True  # s3-toggle writes the settings value here
+        self.commentary_state = None
+        self.commentary_visible = False
+        self.commentary_mode = self.bot.mode
         self.input_suspended = False
         self.input_pause_owned = False
         self.table_windows = {}
@@ -760,6 +814,30 @@ class BilliardsOverlay:
     def request_restart(self):
         self.restart_requested.set()
 
+    def drain_shot_reports(self):
+        """Return queued reports in arrival order; safe from any thread."""
+        reports = []
+        pending = getattr(self, 'shot_reports', None)
+        if pending is None:
+            return reports
+        while True:
+            try:
+                reports.append(pending.get_nowait())
+            except queue.Empty:
+                break
+        return reports
+
+    def reset_shot_reports(self):
+        """Purge stale reports and streak state for a fresh round or bot mode."""
+        self.drain_shot_reports()
+        self.hide_commentary()
+        engine = getattr(self, 'commentary_engine', None)
+        if engine is not None and hasattr(engine, 'reset'):
+            engine.reset()
+        bot = getattr(self, 'bot', None)
+        if bot is not None and hasattr(bot, 'reset_report_state'):
+            bot.reset_report_state()
+
     def request_bot_cycle(self):
         """Queue a mode change from Tk; the animation thread applies it."""
         self.bot_command_serial += 1
@@ -780,6 +858,36 @@ class BilliardsOverlay:
                 self.bot.scores = {'human': 0, 'bot': 0}
             self.bot_ack_serial = serial
             self.bot_ack_mode = mode
+            self.reset_shot_reports()
+            changed = True
+        return changed
+
+    def request_commentary_toggle(self, enabled):
+        """Queue the persisted commentary choice from Tk; the animation thread applies it."""
+        serial = getattr(self, 'commentary_command_serial', 0) + 1
+        self.commentary_command_serial = serial
+        pending = getattr(self, 'commentary_commands', None)
+        if pending is None:
+            pending = self.commentary_commands = queue.SimpleQueue()
+        pending.put((serial, bool(enabled)))
+        return serial
+
+    def consume_commentary_commands(self):
+        """Apply queued commentary choices on the animation thread, in arrival order."""
+        changed = False
+        pending = getattr(self, 'commentary_commands', None)
+        if pending is None:
+            return changed
+        while True:
+            try:
+                serial, enabled = pending.get_nowait()
+            except queue.Empty:
+                break
+            self.commentary_enabled = bool(enabled)
+            if not self.commentary_enabled:
+                self.hide_commentary()
+            self.commentary_ack_serial = serial
+            self.commentary_ack_enabled = self.commentary_enabled
             changed = True
         return changed
 
@@ -792,6 +900,7 @@ class BilliardsOverlay:
         if hidden:
             for hwnd in [*self.windows, *self.table_windows.values()]:
                 win32gui.ShowWindow(hwnd, win32con.SW_HIDE)
+            self.hide_commentary()
             if not self.window_mode:
                 win32gui.ShowWindow(self.listview, win32con.SW_SHOWNA)
             self.table.pause(now)
@@ -818,6 +927,8 @@ class BilliardsOverlay:
 
     def set_felt(self, visible):
         """Show or hide the table frame and wallpaper panel, keeping the wastebaskets; the balls keep rolling on the desktop."""
+        if not visible:
+            self.hide_commentary()  # Felt Off has its own badge; do not stack a bubble on it
         rail = self.table_windows.get('rail')
         if rail is None:
             return
@@ -866,6 +977,7 @@ class BilliardsOverlay:
                 self.restart_requested.clear()
                 self.table.reset()
                 self.pointer = TablePointer()
+                self.reset_shot_reports()
                 self.drawn = [None] * len(self.items)
             self.update_pointer(now, screen)
             self.table.step(dt, now)
@@ -876,6 +988,7 @@ class BilliardsOverlay:
         self.draw_guide()
         self.draw_charge()
         self.draw_round_actions()
+        self.draw_commentary(now)
 
     def keyboard_focus_valid(self):
         """True only when the game (or the desktop in desktop mode) owns focus."""
@@ -990,11 +1103,19 @@ class BilliardsOverlay:
         self.update_credit_pointer(x, y, down, over_credit)
         self.update_round_action_pointer(x, y, down, on_desktop)
         self.consume_bot_commands()
+        self.consume_commentary_commands()
         if self.bot.enabled:
             self.bot.update(self.table, now)
+        elif hasattr(self.table, 'shots'):
+            # Reports are needed with Bot Off too; sync is a no-op until a shot settles.
+            self.bot.sync(self.table, now)
         human_down = down and not self.bot.bot_turn
         human_over = on_desktop and not self.bot.bot_turn
+        shots_before = getattr(self.table, 'shots', 0)
         self.pointer.update(self.table, now, x, y, human_down, human_over)
+        if getattr(self.table, 'shots', shots_before) > shots_before:
+            self.bot.note_shot_input(getattr(self.pointer, 'aim_seconds', 0.0),
+                                     getattr(self.pointer, 'shot_power', 0.0))
 
     def update_round_action_pointer(self, x, y, down, on_desktop):
         serial = self.table.round_serial
@@ -1144,7 +1265,7 @@ class BilliardsOverlay:
         self.position_layer(self.table_windows['guide'], win32con.HWND_BOTTOM)
         self.position_layer(self.table_windows['pockets'], win32con.HWND_BOTTOM)
         self.position_layer(self.table_windows['rail'], win32con.HWND_BOTTOM)
-        for part in ('white', 'cue', 'charge', 'round_actions'):
+        for part in ('white', 'cue', 'charge', 'round_actions', 'commentary'):
             if part in self.table_windows:
                 self.position_layer(self.table_windows[part], win32con.HWND_TOP)
 
@@ -1270,6 +1391,71 @@ class BilliardsOverlay:
         self.position_layer(hwnd, win32con.HWND_TOP, win32con.SWP_SHOWWINDOW)
         self.round_actions_key = key
 
+    def commentary_anchor(self, width, height):
+        """Return the top-left of a bubble in the work area, clear of the rack."""
+        left, top, right, bottom = self.table.work_area
+        x = round(right - COMMENTARY_MARGIN - width)
+        y = round(top + COMMENTARY_MARGIN)
+        bounds = getattr(self.table, 'bounds', None)
+        if bounds:
+            y = min(y, round(bounds[1] - height - COMMENTARY_MARGIN))
+        x = min(max(x, round(left)), max(round(left), round(right - width)))
+        y = min(max(y, round(top)), max(round(top), round(bottom - height)))
+        return x, y
+
+    def hide_commentary(self):
+        """Retire the current line and hide its layer without destroying the window."""
+        visible = getattr(self, 'commentary_visible', False)
+        self.commentary_state = None
+        self.commentary_visible = False
+        if not visible:
+            return
+        hwnd = (getattr(self, 'table_windows', None) or {}).get('commentary')
+        if hwnd is not None:
+            try:
+                win32gui.ShowWindow(hwnd, win32con.SW_HIDE)
+            except win32gui.error:
+                pass
+
+    def draw_commentary(self, now):
+        """Feed settled reports to the engine and present one fading bubble."""
+        engine = getattr(self, 'commentary_engine', None)
+        if engine is None or getattr(self, 'table', None) is None:
+            return
+        bot = getattr(self, 'bot', None)
+        mode = str(getattr(bot, 'mode', 'off') or 'off').strip().lower()
+        bot_on = mode != 'off'
+        enabled = bool(getattr(self, 'commentary_enabled', True))
+        hidden = bool(getattr(self, 'hidden', False))
+        disabled = not bool(getattr(self, 'felt_visible', True))
+        if getattr(self, 'commentary_mode', None) != mode:
+            self.hide_commentary()
+            self.commentary_mode = mode
+        for report in self.drain_shot_reports():
+            line = engine.comment(report, now=now, enabled=enabled, hidden=hidden,
+                                  disabled=disabled, bot_mode=mode, bot_on=bot_on)
+            if line:
+                self.commentary_state = (str(line), now, sum(commentary_timing(line)))
+        state = self.commentary_state
+        if state is None or not bot_on or not enabled or hidden or disabled:
+            self.hide_commentary()
+            return
+        text, started, duration = state
+        elapsed = now - started
+        if elapsed < 0 or elapsed >= duration:
+            self.hide_commentary()
+            return
+        anchor_x, anchor_y = self.commentary_anchor(COMMENTARY_BUBBLE_WIDTH, 40)
+        luma = self.background_luma(anchor_x + COMMENTARY_BUBBLE_WIDTH / 2, anchor_y + 20)
+        palette = COMMENTARY_DARK if luma is not None and luma > COMMENTARY_BRIGHT_LUMA else COMMENTARY_LIGHT
+        frame, _, _ = commentary_art(text, palette=palette, progress=elapsed)
+        x, y = self.commentary_anchor(frame.width, frame.height)
+        hwnd = self.table_windows.get('commentary') or self.table_window('commentary')
+        self.present(hwnd, frame, x, y)
+        if not self.commentary_visible:
+            self.position_layer(hwnd, win32con.HWND_TOP, win32con.SWP_SHOWWINDOW)
+            self.commentary_visible = True
+
     def clear_table(self):
         for hwnd in self.table_windows.values():
             surface = self.surfaces.pop(hwnd, None)
@@ -1278,6 +1464,8 @@ class BilliardsOverlay:
             if win32gui.IsWindow(hwnd):
                 win32gui.DestroyWindow(hwnd)
         self.table_windows.clear()
+        self.commentary_state = None
+        self.commentary_visible = False
         self.guide_key = None
         self.guide_drawn = 0.0
         self.cue_key = None
@@ -1306,6 +1494,7 @@ class BilliardsOverlay:
         self.surfaces[hwnd].present(frame, x, y)
 
     def close(self):
+        self.hide_commentary()
         if not self.window_mode and self.was_visible and win32gui.IsWindow(self.listview):
             win32gui.ShowWindow(self.listview, win32con.SW_SHOWNA)
         self.clear_table()

@@ -613,3 +613,205 @@ class PocketMouthWallTests(unittest.TestCase):
                     if 1 in game.sunk:
                         break
                 self.assertIn(1, game.sunk)
+
+
+class CloneLightTests(unittest.TestCase):
+    """A clone is a scratch round: no shared mutable state and no UI callbacks."""
+
+    @staticmethod
+    def _state(table):
+        return (table.state, table.shots, table.clock, table.round_serial,
+                tuple(sorted(table.sunk)), dict(table.exits), tuple(table.aim),
+                tuple((body.x, body.y, body.vx, body.vy) for body in table.bodies))
+
+    @staticmethod
+    def _settle(table, start):
+        for frame in range(900):
+            table.step(1 / 60, start + (frame + 1) / 60)
+            if table.state in ('ready', 'finished'):
+                return
+
+    def test_clone_copies_bodies_and_mutable_collections_without_aliasing(self):
+        game = BilliardsMotion((0, 0, 1600, 1000), [(64, 64)] * 4)
+        game.sunk.add(2)
+        game.exits[3] = (1., 2., 3., 4., .1)
+        game.white.vx, game.white.vy = 11., -7.
+        clone = game.clone_light()
+        self.assertIsNot(clone, game)
+        self.assertIsNot(clone.white, game.white)
+        self.assertIs(clone.bodies[0], clone.white)
+        self.assertIsNot(clone.sunk, game.sunk)
+        self.assertIsNot(clone.exits, game.exits)
+        self.assertIsNot(clone.poses, game.poses)
+        self.assertIsNot(clone.sizes, game.sizes)
+        self.assertIsNot(clone.rack, game.rack)
+        for source, copied in zip(game.bodies, clone.bodies):
+            self.assertIsNot(source, copied)
+            self.assertEqual((source.x, source.y, source.vx, source.vy, source.angle, source.impact),
+                             (copied.x, copied.y, copied.vx, copied.vy, copied.angle, copied.impact))
+        clone.white.vx = 999.
+        clone.icons[0].x += 50
+        clone.sunk.add(4)
+        clone.exits[3] = (0., 0., 0., 0., 0.)
+        clone.poses.clear()
+        clone.sizes.clear()
+        self.assertEqual((game.white.vx, game.icons[0].x), (11., game.rack[0][0]))
+        self.assertEqual(game.sunk, {2})
+        self.assertEqual(game.exits[3], (1., 2., 3., 4., .1))
+        self.assertEqual(len(game.poses), 4)
+        self.assertEqual(len(game.sizes), 4)
+
+    def test_clone_has_no_snapshot_sink_and_never_publishes_a_reset(self):
+        snapshots = []
+        game = BilliardsMotion((0, 0, 1600, 1000), [(64, 64)] * 4)
+        game.snapshot_sink = snapshots.append
+        with patch.object(BilliardsMotion, '__init__', side_effect=AssertionError('__init__ called')):
+            clone = game.clone_light()
+        self.assertIsNone(clone.snapshot_sink)
+        serial = game.round_serial
+        clone.reset()
+        self.assertEqual(snapshots, [])
+        self.assertEqual(game.round_serial, serial)
+        self.assertEqual(clone.round_serial, serial + 1)
+
+    def test_clone_can_shoot_and_settle_without_changing_the_source(self):
+        game = BilliardsMotion((0, 0, 1600, 1000), [(64, 64)] * 3)
+        game.sunk.add(3)
+        clone = game.clone_light()
+        before = self._state(game)
+        self.assertTrue(clone.shoot(.8, 1.))
+        self._settle(clone, 1.)
+        self.assertIn(clone.state, ('ready', 'finished'))
+        self.assertEqual(self._state(game), before)
+        self.assertEqual(clone.sunk, {3})
+
+    def test_clone_works_after_rescaled_and_after_reset(self):
+        game = BilliardsMotion((0, 0, 1200, 600), [(64, 64)] * 3)
+        game.shoot(.6, 1.)
+        game.sunk.add(2)
+        clone = game.clone_light()
+        before = self._state(game)
+
+        scaled = clone.rescaled((0, 0, 1600, 800))
+        self.assertIsNot(scaled, clone)
+        self.assertIsNone(scaled.snapshot_sink)
+        self._settle(scaled, 1.)
+        self.assertIn(scaled.state, ('ready', 'finished'))
+
+        clone.reset()
+        self.assertTrue(clone.shoot(.7, 20.))
+        self._settle(clone, 20.)
+        self.assertIn(clone.state, ('ready', 'finished'))
+        self.assertEqual(self._state(game), before)
+
+
+class TelemetryTests(unittest.TestCase):
+    """Per-shot physical telemetry used by the planner and the foul/combo checks."""
+
+    @staticmethod
+    def _game(icon_count=1):
+        return BilliardsMotion((0, 0, 1600, 1000), [(64, 64)] * icon_count)
+
+    @staticmethod
+    def _settle(table, start=1.):
+        for frame in range(900):
+            table.step(1 / 60, start + (frame + 1) / 60)
+            if table.state in ('ready', 'finished'):
+                return
+
+    def test_air_shot_has_no_contact_no_rail_and_no_pot(self):
+        game = self._game()
+        game.aim = (1., 0.)
+        self.assertTrue(game.shoot(0., 1.))
+        self._settle(game)
+        self.assertEqual(game.state, 'ready')
+        self.assertFalse(game.hit_any_ball)
+        self.assertIsNone(game.first_target_hit)
+        self.assertEqual(game.rail_hits, 0)
+        self.assertEqual(game.pocket_order, [])
+        self.assertIsNone(game.rails_before_first_pot)
+
+    def test_rail_only_shot_counts_a_real_rebound(self):
+        game = self._game(2)
+        game.aim = (0., -1.)
+        self.assertTrue(game.shoot(.3, 1.))
+        self._settle(game)
+        self.assertGreaterEqual(game.rail_hits, 1)
+        self.assertFalse(game.hit_any_ball)
+        self.assertEqual(game.pocket_order, [])
+
+    def test_first_target_hit_uses_the_body_index_of_the_cue_target(self):
+        game = self._game(2)
+        game.aim = (1., 0.)
+        self.assertTrue(game.shoot(.7, 1.))
+        self._settle(game)
+        self.assertTrue(game.hit_any_ball)
+        self.assertEqual(game.first_target_hit, 1)
+
+    def test_one_continuous_contact_is_recorded_once_across_substeps(self):
+        game = self._game()
+        game.state = 'rolling'
+        target = game.icons[0]
+        game.white.vx = 300.
+        target.x = game.white.x + game.white.radius + target.radius - 1
+        target.y = game.white.y
+        with patch.object(game, '_record_ball_contact',
+                          wraps=game._record_ball_contact) as recorded:
+            game._collide(game.white, target)
+            for frame in range(30):
+                game.step(1 / 240, 1 + frame / 240)
+        self.assertEqual(recorded.call_count, 1)
+        self.assertTrue(game.hit_any_ball)
+        self.assertEqual(game.first_target_hit, 1)
+
+    def test_pocket_order_and_rails_before_first_pot_are_chronological(self):
+        game = self._game(2)
+        game.state = 'rolling'
+        game.rail_hits = 2
+        near, far = game.icons[1], game.icons[0]
+        near_px, near_py = game.pockets[1]
+        far_px, far_py = game.pockets[0]
+        near.x, near.y, near.vx, near.vy = near_px, near_py + 60, 0., -900.
+        far.x, far.y, far.vx, far.vy = far_px, far_py + 150, 0., -900.
+        for frame in range(120):
+            game.step(1 / 60, 1 + frame / 60)
+            if len(game.pocket_order) == 2:
+                break
+        self.assertEqual(game.pocket_order, [2, 1])
+        self.assertEqual(game.rails_before_first_pot, 2)
+
+    def test_new_shoot_resets_all_shot_telemetry(self):
+        game = self._game()
+        game.state = 'ready'
+        game.hit_any_ball = True
+        game.first_target_hit = 1
+        game.rail_hits = 4
+        game.rails_before_first_pot = 3
+        game.pocket_order.extend([1])
+        game._contact_guard.add((0, 1))
+        self.assertTrue(game.shoot(.5, 1.))
+        self.assertFalse(game.hit_any_ball)
+        self.assertIsNone(game.first_target_hit)
+        self.assertEqual(game.rail_hits, 0)
+        self.assertIsNone(game.rails_before_first_pot)
+        self.assertEqual(game.pocket_order, [])
+        self.assertEqual(game._contact_guard, set())
+
+    def test_clone_copies_telemetry_without_aliasing_its_collections(self):
+        game = self._game(2)
+        game.hit_any_ball = True
+        game.first_target_hit = 2
+        game.rail_hits = 3
+        game.rails_before_first_pot = 1
+        game.pocket_order.extend([2, 1])
+        game._contact_guard.add((0, 2))
+        clone = game.clone_light()
+        self.assertEqual((clone.hit_any_ball, clone.first_target_hit, clone.rail_hits,
+                          clone.rails_before_first_pot, clone.pocket_order, clone._contact_guard),
+                         (True, 2, 3, 1, [2, 1], {(0, 2)}))
+        clone.pocket_order.append(1)
+        clone._contact_guard.add((1, 2))
+        clone.rail_hits += 1
+        self.assertEqual(game.pocket_order, [2, 1])
+        self.assertEqual(game._contact_guard, {(0, 2)})
+        self.assertEqual(game.rail_hits, 3)
